@@ -32,6 +32,10 @@ typedef struct {
     int      alarm_count;
     int      sound_mode;
     BOOL     hour24;
+    BOOL     crescendo;
+    BOOL     autostart;
+    BOOL     start_minimized;
+    BOOL     acrylic;
     int      snooze_minutes;
     Alarm    alarms[MAX_ALARMS];
 
@@ -63,6 +67,7 @@ typedef struct {
     BOOL     tray_added;
 
     HANDLE   hSoundThread;
+    HANDLE   hCrescendoThread;
     BOOL     stop_sound;
 
     TCHAR    exe_dir[MAX_PATH];
@@ -92,6 +97,8 @@ void   tray_update_tooltip(AppState *s);
 void   sound_play_alarm(AppState *s);
 void   sound_stop_alarm(AppState *s);
 void   sound_on_mci_notify(AppState *s);
+
+void   autostart_update(AppState *s);
 
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);

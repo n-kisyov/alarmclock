@@ -70,26 +70,63 @@ static void play_mp3_next(AppState *s) {
     TCHAR cmd[1024];
     wsprintf(cmd, L"open \"%s\" type mpegvideo alias alarm_mp3", g_mp3_paths[g_mp3_index]);
     if (mciSendStringW(cmd, NULL, 0, NULL) == 0) {
+        if (s->crescendo) {
+            TCHAR vol[64];
+            wsprintf(vol, L"setaudio alarm_mp3 volume to %d", 100);
+            mciSendStringW(vol, NULL, 0, NULL);
+        }
         mciSendStringW(L"play alarm_mp3 notify", NULL, 0, s->hMainWnd);
         g_mp3_index++;
     }
 }
 
+static DWORD WINAPI crescendo_thread(LPVOID param) {
+    AppState *s = (AppState *)param;
+
+    for (int step = 0; step < 15 && !s->stop_sound; step++) {
+        int vol = 100 + (1000 - 100) * step / 14;
+        if (vol > 1000) vol = 1000;
+        WCHAR cmd[64];
+        wsprintfW(cmd, L"setaudio alarm_mp3 volume to %d", vol);
+        mciSendStringW(cmd, NULL, 0, NULL);
+        Sleep(1000);
+    }
+    return 0;
+}
+
 static DWORD WINAPI sound_simple_thread(LPVOID param) {
     AppState *s = (AppState *)param;
 
-    int dur[]   = {200, 200, 200, 500};
-    int freq[]  = {1000, 1200, 1000, 0};
-    int inter[] = {80, 80, 600, 0};
+    int phases[15][4] = {
+        {200,0,200,0}, {200,0,200,0}, {250,80,250,0},
+        {300,80,300,0}, {350,80,350,0}, {400,80,400,0},
+        {450,80,450,0}, {500,80,500,0}, {550,80,550,500},
+        {600,80,600,500}, {700,80,700,500}, {800,80,800,500},
+        {900,80,900,500}, {1000,80,1000,500}, {1100,80,1100,500}
+    };
 
-    while (!s->stop_sound) {
-        for (int i = 0; i < 4 && !s->stop_sound; i++) {
-            if (freq[i] > 0) {
-                Beep(freq[i], dur[i]);
-            }
-            if (inter[i] > 0) {
-                Sleep(inter[i]);
-            }
+    int step = 0;
+    while (!s->stop_sound && step < 15) {
+        if (s->crescendo) {
+            Beep(600 + step * 40, phases[step][0]);
+            if (!s->stop_sound) Sleep(phases[step][1]);
+            if (!s->stop_sound) Beep(800 + step * 30, phases[step][2]);
+            if (!s->stop_sound) Sleep(phases[step][3]);
+        } else {
+            Beep(1000, 200); if (s->stop_sound) break;
+            Sleep(80);
+            Beep(1200, 200); if (s->stop_sound) break;
+            Sleep(500);
+        }
+        step++;
+    }
+
+    if (!s->crescendo) {
+        while (!s->stop_sound) {
+            Beep(1000, 200); if (s->stop_sound) break;
+            Sleep(80);
+            Beep(1200, 200); if (s->stop_sound) break;
+            Sleep(500);
         }
     }
     s->stop_sound = FALSE;
@@ -101,6 +138,9 @@ void sound_play_alarm(AppState *s) {
     if (s->sound_mode == SOUND_MP3) {
         if (find_mp3_files(s)) {
             play_mp3_next(s);
+            if (s->crescendo) {
+                s->hCrescendoThread = CreateThread(NULL, 0, crescendo_thread, s, 0, NULL);
+            }
             return;
         }
     }
@@ -117,6 +157,11 @@ void sound_stop_alarm(AppState *s) {
         WaitForSingleObject(s->hSoundThread, 3000);
         CloseHandle(s->hSoundThread);
         s->hSoundThread = NULL;
+    }
+    if (s->hCrescendoThread) {
+        WaitForSingleObject(s->hCrescendoThread, 3000);
+        CloseHandle(s->hCrescendoThread);
+        s->hCrescendoThread = NULL;
     }
 
     mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);

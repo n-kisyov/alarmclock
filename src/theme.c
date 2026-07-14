@@ -6,6 +6,12 @@
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
+#ifndef DWMWA_SYSTEMBACKDROP_TYPE
+#define DWMWA_SYSTEMBACKDROP_TYPE 38
+#endif
+#ifndef DWMSBT_ACRYLIC
+#define DWMSBT_ACRYLIC 3
+#endif
 
 static void theme_delete_gdi(AppState *s) {
     if (s->hBgBrush)    { DeleteObject(s->hBgBrush);    s->hBgBrush   = NULL; }
@@ -37,9 +43,13 @@ void theme_apply(HWND hwnd, BOOL dark) {
     BOOL val = dark ? TRUE : FALSE;
     DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &val, sizeof(val));
 
-    BOOL allowDark = dark;
-    DwmSetWindowAttribute(hwnd, 19 /*DWMWA_USE_IMMERSIVE_DARK_MODE*/, &val, sizeof(val));
-    (void)allowDark;
+    int backdrop = g_state.acrylic ? DWMSBT_ACRYLIC : 0;
+    DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
+
+    if (g_state.acrylic) {
+        MARGINS margins = {-1, -1, -1, -1};
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
+    }
 
     InvalidateRect(hwnd, NULL, TRUE);
     UpdateWindow(hwnd);
@@ -68,7 +78,7 @@ void theme_dialog_colors(HWND hDlg, AppState *s, HWND ctrl, HDC hdc) {
     if (lstrcmp(cls, L"Static") == 0) {
         DWORD style = GetWindowLong(ctrl, GWL_STYLE);
         if ((style & SS_TYPEMASK) != SS_ICON && (style & SS_TYPEMASK) != SS_BITMAP) {
-            return;  /* let default brush handle it with SetBkColor */
+            return;
         }
     }
 

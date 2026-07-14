@@ -361,7 +361,12 @@ static void on_paint(HWND hwnd) {
     draw_alarm_panel(hdcMem, hwnd, &clockRect);
 
     /* Blit finished frame to screen */
-    BitBlt(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, SRCCOPY);
+    if (g_state.acrylic) {
+        BLENDFUNCTION bf = { AC_SRC_OVER, 0, 220, 0 };
+        AlphaBlend(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, cw, ch, bf);
+    } else {
+        BitBlt(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, SRCCOPY);
+    }
 
     SelectObject(hdcMem, hOldBmp);
     DeleteObject(hBmp);
@@ -548,7 +553,7 @@ static LRESULT on_create(HWND hwnd) {
 
     theme_apply(hwnd, s->dark_mode);
     tray_create(hwnd, s);
-    SetTimer(hwnd, TIMER_CLOCK, 1000, NULL);
+    SetTimer(hwnd, TIMER_CLOCK, 50, NULL);  /* 20 fps for smooth analog sweep */
 
     return 0;
 }
@@ -594,22 +599,27 @@ static void on_timer(HWND hwnd) {
     SYSTEMTIME st;
     GetLocalTime(&st);
 
-    if (alarms_check(s, &st)) {
-        sound_play_alarm(s);
-        ShowWindow(hwnd, SW_SHOW);
-        SetForegroundWindow(hwnd);
-    }
+    static int lastAlarmSec = -1;
+    if ((int)st.wSecond != lastAlarmSec) {
+        lastAlarmSec = (int)st.wSecond;
 
-    if (s->snooze_pending && GetTickCount() >= s->snooze_end_ms) {
-        s->snooze_pending = FALSE;
-        s->alarm_active = TRUE;
-        s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
-        sound_play_alarm(s);
-        ShowWindow(hwnd, SW_SHOW);
-        SetForegroundWindow(hwnd);
-    }
+        if (alarms_check(s, &st)) {
+            sound_play_alarm(s);
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        }
 
-    tray_update_tooltip(s);
+        if (s->snooze_pending && GetTickCount() >= s->snooze_end_ms) {
+            s->snooze_pending = FALSE;
+            s->alarm_active = TRUE;
+            s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
+            sound_play_alarm(s);
+            ShowWindow(hwnd, SW_SHOW);
+            SetForegroundWindow(hwnd);
+        }
+
+        tray_update_tooltip(s);
+    }
 
     InvalidateRect(hwnd, NULL, FALSE);
 }

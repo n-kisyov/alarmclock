@@ -20,6 +20,10 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         CheckDlgButton(hDlg, IDC_DARKMODE,       s->dark_mode ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_ALARMS_ENABLED, s->alarms_enabled ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_HOUR24,         s->hour24 ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_CRESCENDO,      s->crescendo ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_AUTOSTART,      s->autostart ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_START_MINIMIZED,s->start_minimized ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_ACRYLIC,        s->acrylic ? BST_CHECKED : BST_UNCHECKED);
 
         if (s->clock_style == CLOCK_ANALOG)
             CheckDlgButton(hDlg, IDC_CLOCK_ANALOG, BST_CHECKED);
@@ -125,7 +129,13 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             BOOL darkChanged = (newDark != s->dark_mode);
             s->dark_mode = newDark;
 
-            s->hour24 = (IsDlgButtonChecked(hDlg, IDC_HOUR24) == BST_CHECKED);
+            s->hour24          = (IsDlgButtonChecked(hDlg, IDC_HOUR24) == BST_CHECKED);
+            s->crescendo       = (IsDlgButtonChecked(hDlg, IDC_CRESCENDO) == BST_CHECKED);
+            BOOL newAutostart  = (IsDlgButtonChecked(hDlg, IDC_AUTOSTART) == BST_CHECKED);
+            s->start_minimized = (IsDlgButtonChecked(hDlg, IDC_START_MINIMIZED) == BST_CHECKED);
+
+            BOOL acrylicChanged = (IsDlgButtonChecked(hDlg, IDC_ACRYLIC) == BST_CHECKED) != s->acrylic;
+            s->acrylic = (IsDlgButtonChecked(hDlg, IDC_ACRYLIC) == BST_CHECKED);
 
             int newStyle = (IsDlgButtonChecked(hDlg, IDC_CLOCK_ANALOG) == BST_CHECKED)
                 ? CLOCK_ANALOG : CLOCK_DIGITAL;
@@ -148,9 +158,14 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 if (sel >= 0 && sel < snooze_count) s->snooze_minutes = snooze_values[sel];
             }
 
+            if (newAutostart != s->autostart) {
+                s->autostart = newAutostart;
+                autostart_update(s);
+            }
+
             theme_update_colors(s);
 
-            if (darkChanged) theme_apply(s->hMainWnd, s->dark_mode);
+            if (darkChanged || acrylicChanged) theme_apply(s->hMainWnd, s->dark_mode);
 
             if (styleChanged) {
                 int w = (newStyle == CLOCK_ANALOG) ? 500 : 720;

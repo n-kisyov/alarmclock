@@ -5,6 +5,29 @@
 
 AppState g_state;
 
+void autostart_update(AppState *s) {
+    TCHAR exePath[MAX_PATH];
+    GetModuleFileNameW(NULL, exePath, MAX_PATH);
+
+    HKEY hKey;
+    if (s->autostart) {
+        if (RegCreateKeyExW(HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
+            RegSetValueExW(hKey, L"AlarmClock", 0, REG_SZ,
+                           (BYTE *)exePath, (DWORD)((lstrlenW(exePath) + 1) * sizeof(WCHAR)));
+            RegCloseKey(hKey);
+        }
+    } else {
+        if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+            RegDeleteValueW(hKey, L"AlarmClock");
+            RegCloseKey(hKey);
+        }
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrevInstance;
@@ -21,7 +44,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_state.alarms_enabled  = TRUE;
     g_state.alarm_count     = 5;
     g_state.hour24          = TRUE;
-    g_state.snooze_minutes  = 5;
+    g_state.snooze_minutes  = 3;
+    g_state.acrylic         = TRUE;
 
     GetModuleFileNameW(NULL, g_state.exe_dir, MAX_PATH);
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
@@ -78,7 +102,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     SetMenu(hwnd, hMenu);
 
-    ShowWindow(hwnd, nCmdShow);
+    if (!g_state.start_minimized) {
+        ShowWindow(hwnd, nCmdShow);
+    }
     UpdateWindow(hwnd);
 
     MSG msg;

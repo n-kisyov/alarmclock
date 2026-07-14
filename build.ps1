@@ -94,7 +94,7 @@ $ArgsLink = @(
     "-o", $OutExe
 ) + $LinkObjs + @(
     "-mwindows", "-O2",
-    "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme"
+    "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lmsimg32"
 )
 & $GccPath @ArgsLink
 if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }

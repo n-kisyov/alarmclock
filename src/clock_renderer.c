@@ -66,7 +66,6 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
         DeleteObject(hAmpmFont);
     }
 
-    /* Center the combined block: time + gap + ampm */
     int totalW = timeSize.cx + (ampm[0] ? 6 + ampmW : 0);
     int cx = (rc->left + rc->right) / 2;
     int blockX = cx - totalW / 2;
@@ -103,40 +102,100 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     int h = rc->bottom - rc->top;
     int cx = rc->left + w / 2;
     int cy = rc->top + h / 2;
-    int r  = (w < h ? w : h) / 2 - 15;
-    if (r < 20) r = 20;
+    int r  = (w < h ? w : h) / 2 - 8;
+    if (r < 30) r = 30;
 
+    /* Smooth sub-second time using GetTickCount */
+    DWORD tick = GetTickCount();
+    double msFrac = (tick % 1000) / 1000.0;
+    double secFrac = st->wSecond + msFrac;
+    double minFrac = st->wMinute + secFrac / 60.0;
+    double hourFrac = (st->wHour % 12) + minFrac / 60.0;
+
+    double hourAngle   = hourFrac * (M_PI / 6.0)   - M_PI / 2.0;
+    double minuteAngle = minFrac * (M_PI / 30.0)   - M_PI / 2.0;
+    double secondAngle = secFrac * (M_PI / 30.0)   - M_PI / 2.0;
+
+    /* Face outline */
     HPEN hPen = CreatePen(PS_SOLID, 3, s->accentColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
     HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
-
     Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
 
-    double hourAngle   = ((st->wHour % 12) + st->wMinute / 60.0) * (M_PI / 6.0) - M_PI / 2.0;
-    double minuteAngle = (st->wMinute + st->wSecond / 60.0) * (M_PI / 30.0) - M_PI / 2.0;
-    double secondAngle = st->wSecond * (M_PI / 30.0) - M_PI / 2.0;
+    /* Tick marks */
+    for (int i = 0; i < 60; i++) {
+        double a = i * M_PI / 30.0 - M_PI / 2.0;
+        double ca = cos(a), sa = sin(a);
 
+        if (i % 5 == 0) {
+            HPEN hTick = CreatePen(PS_SOLID, 3, s->textColor);
+            SelectObject(hdc, hTick);
+            MoveToEx(hdc, cx + (int)((r - 4) * ca),  cy + (int)((r - 4) * sa), NULL);
+            LineTo(hdc,   cx + (int)((r - 18) * ca), cy + (int)((r - 18) * sa));
+            DeleteObject(hTick);
+        } else {
+            HPEN hTick = CreatePen(PS_SOLID, 1, s->textColor);
+            SelectObject(hdc, hTick);
+            MoveToEx(hdc, cx + (int)((r - 4) * ca), cy + (int)((r - 4) * sa), NULL);
+            LineTo(hdc,   cx + (int)((r - 10) * ca), cy + (int)((r - 10) * sa));
+            DeleteObject(hTick);
+        }
+    }
+
+    /* Hour numbers */
+    int numH = r / 8;
+    if (numH < 12) numH = 12;
+    HFONT hNumFont = CreateFontW(
+        numH, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HFONT hOldNum = (HFONT)SelectObject(hdc, hNumFont);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, s->textColor);
+
+    for (int i = 1; i <= 12; i++) {
+        double a = i * M_PI / 6.0 - M_PI / 2.0;
+        WCHAR num[4];
+        wsprintfW(num, L"%d", i);
+        SIZE sz;
+        GetTextExtentPoint32W(hdc, num, lstrlenW(num), &sz);
+        int nx = cx + (int)((r - 30) * cos(a)) - sz.cx / 2;
+        int ny = cy + (int)((r - 30) * sin(a)) - sz.cy / 2;
+        TextOutW(hdc, nx, ny, num, lstrlenW(num));
+    }
+
+    SelectObject(hdc, hOldNum);
+    DeleteObject(hNumFont);
+
+    /* Hands */
     int hLen = (int)(r * 0.50);
     int mLen = (int)(r * 0.75);
-    int sLen = (int)(r * 0.85);
+    int sLen = (int)(r * 0.82);
 
-    HPEN hThin = CreatePen(PS_SOLID, 1, s->textColor);
-    SelectObject(hdc, hThin);
+    HPEN hSec = CreatePen(PS_SOLID, 1, RGB(0xE0, 0x40, 0x40));
+    SelectObject(hdc, hSec);
     MoveToEx(hdc, cx, cy, NULL);
     LineTo(hdc, cx + (int)(sLen * cos(secondAngle)), cy + (int)(sLen * sin(secondAngle)));
-    DeleteObject(hThin);
+    DeleteObject(hSec);
 
-    HPEN hMed = CreatePen(PS_SOLID, 2, s->textColor);
-    SelectObject(hdc, hMed);
+    HPEN hMin = CreatePen(PS_SOLID, 2, s->textColor);
+    SelectObject(hdc, hMin);
     MoveToEx(hdc, cx, cy, NULL);
     LineTo(hdc, cx + (int)(mLen * cos(minuteAngle)), cy + (int)(mLen * sin(minuteAngle)));
-    DeleteObject(hMed);
+    DeleteObject(hMin);
 
-    HPEN hThick = CreatePen(PS_SOLID, 4, s->accentColor);
-    SelectObject(hdc, hThick);
+    HPEN hHour = CreatePen(PS_SOLID, 4, s->accentColor);
+    SelectObject(hdc, hHour);
     MoveToEx(hdc, cx, cy, NULL);
     LineTo(hdc, cx + (int)(hLen * cos(hourAngle)), cy + (int)(hLen * sin(hourAngle)));
-    DeleteObject(hThick);
+    DeleteObject(hHour);
+
+    /* Center dot */
+    HPEN hDot = CreatePen(PS_SOLID, 5, s->accentColor);
+    SelectObject(hdc, hDot);
+    MoveToEx(hdc, cx, cy, NULL);
+    LineTo(hdc, cx + 1, cy);
+    DeleteObject(hDot);
 
     SelectObject(hdc, hOldBr);
     SelectObject(hdc, hOldPen);

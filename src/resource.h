@@ -16,6 +16,10 @@
 #define IDC_ALARM_COUNT      207
 #define IDC_HOUR24           208
 #define IDC_SNOOZE_MINUTES   209
+#define IDC_CRESCENDO        210
+#define IDC_AUTOSTART        211
+#define IDC_START_MINIMIZED  212
+#define IDC_ACRYLIC          213
 
 #define IDD_ALARM            300
 #define IDC_ALARM_HOUR       301

@@ -118,6 +118,14 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
             json_read_bool(&r, &s->dark_mode);
         } else if (lstrcmp(key, L"hour24") == 0) {
             json_read_bool(&r, &s->hour24);
+        } else if (lstrcmp(key, L"crescendo") == 0) {
+            json_read_bool(&r, &s->crescendo);
+        } else if (lstrcmp(key, L"autostart") == 0) {
+            json_read_bool(&r, &s->autostart);
+        } else if (lstrcmp(key, L"start_minimized") == 0) {
+            json_read_bool(&r, &s->start_minimized);
+        } else if (lstrcmp(key, L"acrylic") == 0) {
+            json_read_bool(&r, &s->acrylic);
         } else if (lstrcmp(key, L"clock_style") == 0) {
             TCHAR val[32];
             if (json_read_string(&r, val, 32)) {
@@ -221,6 +229,10 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         L"{\n"
         L"  \"dark_mode\": %s,\n"
         L"  \"hour24\": %s,\n"
+        L"  \"crescendo\": %s,\n"
+        L"  \"autostart\": %s,\n"
+        L"  \"start_minimized\": %s,\n"
+        L"  \"acrylic\": %s,\n"
         L"  \"clock_style\": \"%s\",\n"
         L"  \"alarms_enabled\": %s,\n"
         L"  \"alarm_count\": %d,\n"
@@ -233,6 +245,10 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         L"  \"alarms\": [\n",
         s->dark_mode ? L"true" : L"false",
         s->hour24 ? L"true" : L"false",
+        s->crescendo ? L"true" : L"false",
+        s->autostart ? L"true" : L"false",
+        s->start_minimized ? L"true" : L"false",
+        s->acrylic ? L"true" : L"false",
         s->clock_style == CLOCK_ANALOG ? L"analog" : L"digital",
         s->alarms_enabled ? L"true" : L"false",
         s->alarm_count,
