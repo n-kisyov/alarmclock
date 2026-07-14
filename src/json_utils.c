@@ -83,17 +83,23 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
     DWORD sz = GetFileSize(hFile, NULL);
     if (sz == INVALID_FILE_SIZE || sz == 0) { CloseHandle(hFile); return FALSE; }
 
-    TCHAR *buf = (TCHAR *)malloc(sz + sizeof(TCHAR));
-    if (!buf) { CloseHandle(hFile); return FALSE; }
+    char *raw = (char *)malloc(sz + 1);
+    if (!raw) { CloseHandle(hFile); return FALSE; }
 
     DWORD read;
-    ReadFile(hFile, buf, sz, &read, NULL);
+    ReadFile(hFile, raw, sz, &read, NULL);
     CloseHandle(hFile);
-    buf[read / sizeof(TCHAR)] = 0;
+    raw[read] = 0;
+
+    int wideLen = MultiByteToWideChar(CP_UTF8, 0, raw, -1, NULL, 0);
+    TCHAR *buf = (TCHAR *)malloc((wideLen + 1) * sizeof(TCHAR));
+    if (!buf) { free(raw); return FALSE; }
+    MultiByteToWideChar(CP_UTF8, 0, raw, -1, buf, wideLen);
+    free(raw);
 
     JsonReader r;
     r.p = buf;
-    r.end = buf + (read / sizeof(TCHAR));
+    r.end = buf + wideLen - 1;
 
     alarms_init(s);
 
@@ -212,19 +218,19 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
     int len = 0;
 
     len = wsprintf(buf,
-        L"{\r\n"
-        L"  \"dark_mode\": %s,\r\n"
-        L"  \"hour24\": %s,\r\n"
-        L"  \"clock_style\": \"%s\",\r\n"
-        L"  \"alarms_enabled\": %s,\r\n"
-        L"  \"alarm_count\": %d,\r\n"
-        L"  \"snooze_minutes\": %d,\r\n"
-        L"  \"win_x\": %d,\r\n"
-        L"  \"win_y\": %d,\r\n"
-        L"  \"win_w\": %d,\r\n"
-        L"  \"win_h\": %d,\r\n"
-        L"  \"sound_mode\": \"%s\",\r\n"
-        L"  \"alarms\": [\r\n",
+        L"{\n"
+        L"  \"dark_mode\": %s,\n"
+        L"  \"hour24\": %s,\n"
+        L"  \"clock_style\": \"%s\",\n"
+        L"  \"alarms_enabled\": %s,\n"
+        L"  \"alarm_count\": %d,\n"
+        L"  \"snooze_minutes\": %d,\n"
+        L"  \"win_x\": %d,\n"
+        L"  \"win_y\": %d,\n"
+        L"  \"win_w\": %d,\n"
+        L"  \"win_h\": %d,\n"
+        L"  \"sound_mode\": \"%s\",\n"
+        L"  \"alarms\": [\n",
         s->dark_mode ? L"true" : L"false",
         s->hour24 ? L"true" : L"false",
         s->clock_style == CLOCK_ANALOG ? L"analog" : L"digital",
@@ -237,7 +243,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
     for (int i = 0; i < MAX_ALARMS; i++) {
         TCHAR comma = (i < MAX_ALARMS - 1) ? L',' : L' ';
         len += wsprintf(buf + len,
-            L"    {\"hour\": %d, \"minute\": %d, \"enabled\": %s, \"label\": \"%s\", \"repeat\": %d}%c\r\n",
+            L"    {\"hour\": %d, \"minute\": %d, \"enabled\": %s, \"label\": \"%s\", \"repeat\": %d}%c\n",
             s->alarms[i].hour, s->alarms[i].minute,
             s->alarms[i].enabled ? L"true" : L"false",
             s->alarms[i].label,
@@ -245,11 +251,12 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
             comma);
     }
 
-    len += wsprintf(buf + len, L"  ]\r\n}\r\n");
+    len += wsprintf(buf + len, L"  ]\n}\n");
 
+    char utf8buf[8192];
+    int utf8len = WideCharToMultiByte(CP_UTF8, 0, buf, len, utf8buf, sizeof(utf8buf), NULL, NULL);
     DWORD written;
-    DWORD bytes = (DWORD)(len * sizeof(TCHAR));
-    WriteFile(hFile, buf, bytes, &written, NULL);
+    WriteFile(hFile, utf8buf, (DWORD)utf8len, &written, NULL);
     CloseHandle(hFile);
     return TRUE;
 }
