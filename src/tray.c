@@ -37,3 +37,46 @@ void tray_show_menu(HWND hwnd, AppState *s) {
     TrackPopupMenu(hMenu, TPM_RIGHTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd, NULL);
     DestroyMenu(hMenu);
 }
+
+void tray_update_tooltip(AppState *s) {
+    if (!s->tray_added) return;
+
+    int bestHour = ALARM_UNSET;
+    int bestMin  = ALARM_UNSET;
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    int nowMin = st.wHour * 60 + st.wMinute;
+    int today = st.wDayOfWeek;
+
+    for (int i = 0; i < s->alarm_count; i++) {
+        if (!s->alarms[i].enabled || s->alarms[i].hour == ALARM_UNSET) continue;
+
+        int alarmMin = s->alarms[i].hour * 60 + s->alarms[i].minute;
+
+        if (s->alarms[i].repeat_mode == REPEAT_ONCE) {
+            if (alarmMin <= nowMin) continue;
+        }
+        if (s->alarms[i].repeat_mode == REPEAT_WEEKDAYS &&
+            (today == 0 || today == 6)) continue;
+        if (s->alarms[i].repeat_mode == REPEAT_WEEKENDS &&
+            (today >= 1 && today <= 5)) continue;
+
+        if (bestHour == ALARM_UNSET || alarmMin < bestHour * 60 + bestMin) {
+            bestHour = s->alarms[i].hour;
+            bestMin  = s->alarms[i].minute;
+        }
+    }
+
+    WCHAR tip[128];
+    if (bestHour >= 0) {
+        wsprintfW(tip, L"Next alarm: %02d:%02d", bestHour, bestMin);
+    } else {
+        lstrcpyW(tip, L"AlarmClock");
+    }
+
+    if (lstrcmpW(s->nid.szTip, tip) != 0) {
+        lstrcpyW(s->nid.szTip, tip);
+        Shell_NotifyIconW(NIM_MODIFY, &s->nid);
+    }
+}

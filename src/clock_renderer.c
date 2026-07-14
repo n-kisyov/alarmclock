@@ -6,9 +6,18 @@
 
 void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s) {
 
-    TCHAR timeBuf[32];
+    TCHAR timeBuf[16];
     TCHAR dateBuf[64];
-    wsprintf(timeBuf, L"%02d:%02d:%02d", st->wHour, st->wMinute, st->wSecond);
+    WCHAR ampm[4] = L"";
+
+    int h = st->wHour;
+    if (!s->hour24) {
+        ampm[0] = (st->wHour >= 12) ? L'P' : L'A';
+        ampm[1] = L'M';
+        if (h == 0) h = 12;
+        else if (h > 12) h -= 12;
+    }
+    wsprintf(timeBuf, L"%02d:%02d:%02d", h, st->wMinute, st->wSecond);
 
     const TCHAR *months[] = {
         L"January", L"February", L"March", L"April", L"May", L"June",
@@ -30,15 +39,58 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
 
     int gap    = tmClock.tmHeight / 10;
     int startY = rc->top + 2;
+    int timeBaseline = startY + tmClock.tmAscent;
 
+    /* Measure time digit width */
     SelectObject(hdc, s->hClockFont);
+    SIZE timeSize;
+    GetTextExtentPoint32W(hdc, timeBuf, lstrlenW(timeBuf), &timeSize);
+
+    /* Measure AM/PM width in small font if needed */
+    int ampmW = 0;
+    int ampmH = 0;
+    TEXTMETRICW tmAm;
+    if (ampm[0]) {
+        ampmH = tmClock.tmHeight / 5;
+        if (ampmH < 12) ampmH = 12;
+        HFONT hAmpmFont = CreateFontW(
+            ampmH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hPrev = (HFONT)SelectObject(hdc, hAmpmFont);
+        SIZE amSize;
+        GetTextExtentPoint32W(hdc, ampm, 2, &amSize);
+        ampmW = amSize.cx;
+        GetTextMetricsW(hdc, &tmAm);
+        SelectObject(hdc, hPrev);
+        DeleteObject(hAmpmFont);
+    }
+
+    /* Center the combined block: time + gap + ampm */
+    int totalW = timeSize.cx + (ampm[0] ? 6 + ampmW : 0);
+    int cx = (rc->left + rc->right) / 2;
+    int blockX = cx - totalW / 2;
+
     SetTextColor(hdc, tc);
-    RECT tr = *rc;
-    tr.top = startY;
-    DrawText(hdc, timeBuf, -1, &tr, DT_CENTER | DT_SINGLELINE | DT_TOP);
+    SelectObject(hdc, s->hClockFont);
+    ExtTextOutW(hdc, blockX, startY, 0, NULL, timeBuf, lstrlenW(timeBuf), NULL);
+
+    if (ampm[0]) {
+        HFONT hAmpmFont = CreateFontW(
+            ampmH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HFONT hOldAmpm = (HFONT)SelectObject(hdc, hAmpmFont);
+        SetTextColor(hdc, tc);
+        ExtTextOutW(hdc, blockX + timeSize.cx + 6, timeBaseline - tmAm.tmAscent,
+                     0, NULL, ampm, lstrlenW(ampm), NULL);
+        SelectObject(hdc, hOldAmpm);
+        DeleteObject(hAmpmFont);
+    }
 
     SelectObject(hdc, s->hDateFont);
     SetTextColor(hdc, s->textColor);
+    RECT tr = *rc;
     tr.top = startY + tmClock.tmHeight + gap;
     DrawText(hdc, dateBuf, -1, &tr, DT_CENTER | DT_SINGLELINE | DT_TOP);
 

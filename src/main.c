@@ -16,10 +16,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     InitCommonControlsEx(&icc);
 
     ZeroMemory(&g_state, sizeof(g_state));
-    g_state.clock_style    = CLOCK_DIGITAL;
-    g_state.sound_mode     = SOUND_SIMPLE;
-    g_state.alarms_enabled = TRUE;
-    g_state.alarm_count    = 5;
+    g_state.clock_style     = CLOCK_DIGITAL;
+    g_state.sound_mode      = SOUND_SIMPLE;
+    g_state.alarms_enabled  = TRUE;
+    g_state.alarm_count     = 5;
+    g_state.hour24          = TRUE;
+    g_state.snooze_minutes  = 5;
 
     GetModuleFileNameW(NULL, g_state.exe_dir, MAX_PATH);
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
@@ -43,15 +45,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         return 1;
     }
 
-    int width  = g_state.clock_style == CLOCK_ANALOG ? 500 : 720;
-    int height = g_state.clock_style == CLOCK_ANALOG ? 710 : 520;
+    if (g_state.winW == 0) {
+        g_state.winW = (g_state.clock_style == CLOCK_ANALOG) ? 500 : 720;
+        g_state.winH = (g_state.clock_style == CLOCK_ANALOG) ? 710 : 520;
+        g_state.winX = (GetSystemMetrics(SM_CXSCREEN) - g_state.winW) / 2;
+        g_state.winY = (GetSystemMetrics(SM_CYSCREEN) - g_state.winH) / 2;
+    }
 
     HWND hwnd = CreateWindowExW(
         0, APP_CLASS, APP_NAME,
         WS_OVERLAPPEDWINDOW,
-        (GetSystemMetrics(SM_CXSCREEN) - width) / 2,
-        (GetSystemMetrics(SM_CYSCREEN) - height) / 2,
-        width, height,
+        g_state.winX, g_state.winY, g_state.winW, g_state.winH,
         NULL, NULL, hInstance, NULL);
 
     if (!hwnd) {

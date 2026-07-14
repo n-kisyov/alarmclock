@@ -2,6 +2,12 @@
 #include "main.h"
 #include "theme.h"
 
+static const TCHAR *snooze_items[] = {
+    L"1", L"2", L"3", L"5", L"10", L"15", L"20", L"30"
+};
+static const int snooze_values[] = {1, 2, 3, 5, 10, 15, 20, 30};
+static const int snooze_count = 8;
+
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     static AppState *s;
 
@@ -13,6 +19,7 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
         CheckDlgButton(hDlg, IDC_DARKMODE,       s->dark_mode ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_ALARMS_ENABLED, s->alarms_enabled ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_HOUR24,         s->hour24 ? BST_CHECKED : BST_UNCHECKED);
 
         if (s->clock_style == CLOCK_ANALOG)
             CheckDlgButton(hDlg, IDC_CLOCK_ANALOG, BST_CHECKED);
@@ -32,6 +39,16 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)buf);
             }
             SendMessageW(hCombo, CB_SETCURSEL, s->alarm_count - 1, 0);
+        }
+
+        {
+            HWND hCombo = GetDlgItem(hDlg, IDC_SNOOZE_MINUTES);
+            int sel = 0;
+            for (int i = 0; i < snooze_count; i++) {
+                SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)snooze_items[i]);
+                if (snooze_values[i] == s->snooze_minutes) sel = i;
+            }
+            SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
         }
 
         return TRUE;
@@ -108,6 +125,8 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             BOOL darkChanged = (newDark != s->dark_mode);
             s->dark_mode = newDark;
 
+            s->hour24 = (IsDlgButtonChecked(hDlg, IDC_HOUR24) == BST_CHECKED);
+
             int newStyle = (IsDlgButtonChecked(hDlg, IDC_CLOCK_ANALOG) == BST_CHECKED)
                 ? CLOCK_ANALOG : CLOCK_DIGITAL;
             int styleChanged = (newStyle != s->clock_style);
@@ -122,6 +141,11 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_COUNT);
                 int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
                 if (sel >= 0) s->alarm_count = sel + 1;
+            }
+            {
+                HWND hCombo = GetDlgItem(hDlg, IDC_SNOOZE_MINUTES);
+                int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < snooze_count) s->snooze_minutes = snooze_values[sel];
             }
 
             theme_update_colors(s);

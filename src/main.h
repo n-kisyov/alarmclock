@@ -18,9 +18,11 @@
 #define SOUND_MP3      1
 
 typedef struct {
-    int  hour;
-    int  minute;
-    BOOL enabled;
+    int   hour;
+    int   minute;
+    BOOL  enabled;
+    WCHAR label[32];
+    int   repeat_mode;
 } Alarm;
 
 typedef struct {
@@ -29,7 +31,18 @@ typedef struct {
     BOOL     alarms_enabled;
     int      alarm_count;
     int      sound_mode;
+    BOOL     hour24;
+    int      snooze_minutes;
     Alarm    alarms[MAX_ALARMS];
+
+    int      winX, winY, winW, winH;
+
+    BOOL     alarm_active;
+    int      last_fire_min;
+
+    BOOL     snooze_pending;
+    DWORD    snooze_end_ms;
+    int      snooze_total_sec;
 
     HWND     hMainWnd;
     HFONT    hClockFont;
@@ -49,7 +62,6 @@ typedef struct {
     NOTIFYICONDATAW nid;
     BOOL     tray_added;
 
-    BOOL     alarm_active;
     HANDLE   hSoundThread;
     BOOL     stop_sound;
 
@@ -68,7 +80,6 @@ BOOL   json_save_settings(const AppState *s, const TCHAR *path);
 
 void   alarms_init(AppState *s);
 BOOL   alarms_check(AppState *s, const SYSTEMTIME *st);
-void   alarms_clear(AppState *s);
 
 void   clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
 void   clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
@@ -76,9 +87,11 @@ void   clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const Ap
 void   tray_create(HWND hwnd, AppState *s);
 void   tray_remove(AppState *s);
 void   tray_show_menu(HWND hwnd, AppState *s);
+void   tray_update_tooltip(AppState *s);
 
 void   sound_play_alarm(AppState *s);
 void   sound_stop_alarm(AppState *s);
+void   sound_on_mci_notify(AppState *s);
 
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);

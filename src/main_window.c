@@ -198,10 +198,24 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         DeleteObject(hChkPen);
         DeleteObject(hChkBr);
 
-        /* Time text */
-        TCHAR timeStr[16];
+        /* Time + label text */
+        TCHAR timeStr[64];
         if (s->alarms[i].hour >= 0 && s->alarms[i].minute >= 0) {
-            wsprintf(timeStr, L"%02d:%02d", s->alarms[i].hour, s->alarms[i].minute);
+            int h = s->alarms[i].hour;
+            WCHAR ap[4] = L"";
+            if (!s->hour24) {
+                ap[0] = (h >= 12) ? L'P' : L'A';
+                ap[1] = L'M';
+                if (h == 0) h = 12;
+                else if (h > 12) h -= 12;
+            }
+            if (s->alarms[i].label[0]) {
+                wsprintf(timeStr, L"%02d:%02d %s %s",
+                         h, s->alarms[i].minute, ap, s->alarms[i].label);
+            } else {
+                wsprintf(timeStr, L"%02d:%02d %s",
+                         h, s->alarms[i].minute, ap);
+            }
         } else {
             lstrcpy(timeStr, L"--:--");
         }
@@ -215,7 +229,7 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, s->textColor);
         HFONT hRowFont = (HFONT)SelectObject(hdc, s->hGuiFont);
-        DrawText(hdc, timeStr, -1, &timeR, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        DrawText(hdc, timeStr, -1, &timeR, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         SelectObject(hdc, hRowFont);
 
         /* Edit button */
@@ -232,24 +246,68 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
 
 static void draw_dismiss_button(HDC hdc, const RECT *clockRect) {
     AppState *s = &g_state;
-    if (!s->alarm_active) return;
+    if (!s->alarm_active && !s->snooze_pending) return;
+
+    int cx = clockRect->left + (clockRect->right - clockRect->left) / 2;
+
+    if (s->snooze_pending) {
+        /* Countdown display during snooze */
+        DWORD remainMs = (s->snooze_end_ms > GetTickCount()) ? (s->snooze_end_ms - GetTickCount()) : 0;
+        int remainSec = (int)(remainMs / 1000);
+        int remainMin = remainSec / 60;
+        remainSec = remainSec % 60;
+
+        WCHAR buf[32];
+        wsprintfW(buf, L"Snoozed  %d:%02d", remainMin, remainSec);
+
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, s->textColor);
+        HFONT hOld = (HFONT)SelectObject(hdc, s->hGuiFont);
+        RECT r;
+        r.left   = cx - 100;
+        r.top    = clockRect->bottom - 30;
+        r.right  = cx + 100;
+        r.bottom = r.top + 14;
+        DrawTextW(hdc, buf, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, hOld);
+
+        /* Cancel snooze button */
+        RECT btn;
+        btn.left   = cx - 52;
+        btn.top    = clockRect->bottom - 30;
+        btn.right  = cx + 52;
+        btn.bottom = btn.top + 26;
+        draw_button(hdc, &btn, L"CANCEL", RGB(0xE8, 0x11, 0x23), RGB(0xFF, 0xFF, 0xFF));
+        return;
+    }
 
     RECT r;
-    r.left   = clockRect->left + (clockRect->right - clockRect->left) / 2 - 50;
     r.top    = clockRect->bottom - 30;
-    r.right  = r.left + 100;
     r.bottom = r.top + 26;
 
-    COLORREF btnBg = RGB(0xE8, 0x11, 0x23);
-    draw_button(hdc, &r, L"DISMISS", btnBg, RGB(0xFF, 0xFF, 0xFF));
+    r.left   = cx - 108;
+    r.right  = cx - 6;
+    draw_button(hdc, &r, L"SNOOZE", RGB(0xDE, 0x87, 0x00), RGB(0xFF, 0xFF, 0xFF));
+
+    r.left   = cx + 6;
+    r.right  = cx + 108;
+    draw_button(hdc, &r, L"DISMISS", RGB(0xE8, 0x11, 0x23), RGB(0xFF, 0xFF, 0xFF));
 }
 
 static RECT get_dismiss_rect(const RECT *clockRect) {
+    int cx = clockRect->left + (clockRect->right - clockRect->left) / 2;
     RECT r;
-    r.left   = clockRect->left + (clockRect->right - clockRect->left) / 2 - 50;
-    r.top    = clockRect->bottom - 30;
-    r.right  = r.left + 100;
-    r.bottom = r.top + 26;
+    if (g_state.snooze_pending) {
+        r.left   = cx - 52;
+        r.top    = clockRect->bottom - 30;
+        r.right  = cx + 52;
+        r.bottom = r.top + 26;
+    } else {
+        r.left   = cx + 6;
+        r.top    = clockRect->bottom - 30;
+        r.right  = cx + 108;
+        r.bottom = r.top + 26;
+    }
     return r;
 }
 
@@ -312,9 +370,23 @@ static void on_paint(HWND hwnd) {
     EndPaint(hwnd, &ps);
 }
 
+static void snooze_alarm(void) {
+    AppState *s = &g_state;
+
+    s->snooze_total_sec = s->snooze_minutes * 60;
+    s->snooze_end_ms    = GetTickCount() + (DWORD)s->snooze_total_sec * 1000;
+    s->snooze_pending   = TRUE;
+
+    s->alarm_active = FALSE;
+    sound_stop_alarm(s);
+
+    InvalidateRect(s->hMainWnd, NULL, FALSE);
+}
+
 static void dismiss_alarm(void) {
     AppState *s = &g_state;
-    s->alarm_active = FALSE;
+    s->alarm_active   = FALSE;
+    s->snooze_pending  = FALSE;
     sound_stop_alarm(s);
     InvalidateRect(s->hMainWnd, NULL, FALSE);
 }
@@ -326,12 +398,31 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
     RECT clockRect;
     calc_clock_rect(hwnd, &clockRect);
 
-    /* Dismiss button hit test */
-    if (g_state.alarm_active) {
+    /* Snooze / Dismiss / Cancel button hit test */
+    if (g_state.alarm_active || g_state.snooze_pending) {
         RECT dr = get_dismiss_rect(&clockRect);
-        if (mx >= dr.left && mx <= dr.right && my >= dr.top && my <= dr.bottom) {
-            dismiss_alarm();
-            return;
+
+        if (g_state.snooze_pending) {
+            if (mx >= dr.left && mx <= dr.right && my >= dr.top && my <= dr.bottom) {
+                dismiss_alarm();
+                return;
+            }
+        } else {
+            int cx = clockRect.left + (clockRect.right - clockRect.left) / 2;
+            RECT sr;
+            sr.left   = cx - 108;
+            sr.top    = clockRect.bottom - 30;
+            sr.right  = cx - 6;
+            sr.bottom = sr.top + 26;
+
+            if (mx >= sr.left && mx <= sr.right && my >= sr.top && my <= sr.bottom) {
+                snooze_alarm();
+                return;
+            }
+            if (mx >= dr.left && mx <= dr.right && my >= dr.top && my <= dr.bottom) {
+                dismiss_alarm();
+                return;
+            }
         }
     }
 
@@ -355,15 +446,19 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
 
         if (mx >= editR.left && mx <= editR.right && my >= editR.top && my <= editR.bottom) {
             AlarmEditData data;
-            data.hour    = g_state.alarms[i].hour;
-            data.minute  = g_state.alarms[i].minute;
-            data.enabled = g_state.alarms[i].enabled;
+            data.hour        = g_state.alarms[i].hour;
+            data.minute      = g_state.alarms[i].minute;
+            data.enabled     = g_state.alarms[i].enabled;
+            data.repeat_mode = g_state.alarms[i].repeat_mode;
+            lstrcpyW(data.label, g_state.alarms[i].label);
 
             if (DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_ALARM),
                                 hwnd, alarm_dlg_proc, (LPARAM)&data) == IDOK) {
-                g_state.alarms[i].hour    = data.hour;
-                g_state.alarms[i].minute  = data.minute;
-                g_state.alarms[i].enabled = data.enabled;
+                g_state.alarms[i].hour        = data.hour;
+                g_state.alarms[i].minute      = data.minute;
+                g_state.alarms[i].enabled     = data.enabled;
+                g_state.alarms[i].repeat_mode = data.repeat_mode;
+                lstrcpyW(g_state.alarms[i].label, data.label);
                 settings_save(&g_state);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
@@ -371,9 +466,11 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
         }
 
         if (mx >= clrR.left && mx <= clrR.right && my >= clrR.top && my <= clrR.bottom) {
-            g_state.alarms[i].hour    = ALARM_UNSET;
-            g_state.alarms[i].minute  = ALARM_UNSET;
-            g_state.alarms[i].enabled = FALSE;
+            g_state.alarms[i].hour        = ALARM_UNSET;
+            g_state.alarms[i].minute      = ALARM_UNSET;
+            g_state.alarms[i].enabled     = FALSE;
+            g_state.alarms[i].repeat_mode = REPEAT_ONCE;
+            g_state.alarms[i].label[0]    = 0;
             settings_save(&g_state);
             InvalidateRect(hwnd, NULL, FALSE);
             return;
@@ -503,6 +600,17 @@ static void on_timer(HWND hwnd) {
         SetForegroundWindow(hwnd);
     }
 
+    if (s->snooze_pending && GetTickCount() >= s->snooze_end_ms) {
+        s->snooze_pending = FALSE;
+        s->alarm_active = TRUE;
+        s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
+        sound_play_alarm(s);
+        ShowWindow(hwnd, SW_SHOW);
+        SetForegroundWindow(hwnd);
+    }
+
+    tray_update_tooltip(s);
+
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -564,6 +672,16 @@ static void on_destroy(HWND hwnd) {
 
     KillTimer(hwnd, TIMER_CLOCK);
     sound_stop_alarm(s);
+
+    WINDOWPLACEMENT wp;
+    wp.length = sizeof(wp);
+    if (GetWindowPlacement(hwnd, &wp)) {
+        s->winX = wp.rcNormalPosition.left;
+        s->winY = wp.rcNormalPosition.top;
+        s->winW = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
+        s->winH = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
+    }
+
     settings_save(s);
     tray_remove(s);
 

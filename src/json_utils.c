@@ -110,6 +110,8 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
 
         if (lstrcmp(key, L"dark_mode") == 0) {
             json_read_bool(&r, &s->dark_mode);
+        } else if (lstrcmp(key, L"hour24") == 0) {
+            json_read_bool(&r, &s->hour24);
         } else if (lstrcmp(key, L"clock_style") == 0) {
             TCHAR val[32];
             if (json_read_string(&r, val, 32)) {
@@ -123,6 +125,18 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
             if (ac < 1) ac = 1;
             if (ac > MAX_ALARMS) ac = MAX_ALARMS;
             s->alarm_count = ac;
+        } else if (lstrcmp(key, L"snooze_minutes") == 0) {
+            int sm = 5;
+            json_read_int(&r, &sm);
+            if (sm >= 1 && sm <= 60) s->snooze_minutes = sm;
+        } else if (lstrcmp(key, L"win_x") == 0) {
+            json_read_int(&r, &s->winX);
+        } else if (lstrcmp(key, L"win_y") == 0) {
+            json_read_int(&r, &s->winY);
+        } else if (lstrcmp(key, L"win_w") == 0) {
+            json_read_int(&r, &s->winW);
+        } else if (lstrcmp(key, L"win_h") == 0) {
+            json_read_int(&r, &s->winH);
         } else if (lstrcmp(key, L"sound_mode") == 0) {
             TCHAR val[32];
             if (json_read_string(&r, val, 32)) {
@@ -153,6 +167,15 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
                         json_read_int(&r, &s->alarms[idx].minute);
                     } else if (lstrcmp(akey, L"enabled") == 0) {
                         json_read_bool(&r, &s->alarms[idx].enabled);
+                    } else if (lstrcmp(akey, L"label") == 0) {
+                        TCHAR lbuf[32];
+                        if (json_read_string(&r, lbuf, 32)) {
+                            lstrcpynW(s->alarms[idx].label, lbuf, 32);
+                        }
+                    } else if (lstrcmp(akey, L"repeat") == 0) {
+                        int rm = 0;
+                        json_read_int(&r, &rm);
+                        if (rm >= 0 && rm <= 3) s->alarms[idx].repeat_mode = rm;
                     }
 
                     json_skip_ws(&r);
@@ -191,23 +214,35 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
     len = wsprintf(buf,
         L"{\r\n"
         L"  \"dark_mode\": %s,\r\n"
+        L"  \"hour24\": %s,\r\n"
         L"  \"clock_style\": \"%s\",\r\n"
         L"  \"alarms_enabled\": %s,\r\n"
         L"  \"alarm_count\": %d,\r\n"
+        L"  \"snooze_minutes\": %d,\r\n"
+        L"  \"win_x\": %d,\r\n"
+        L"  \"win_y\": %d,\r\n"
+        L"  \"win_w\": %d,\r\n"
+        L"  \"win_h\": %d,\r\n"
         L"  \"sound_mode\": \"%s\",\r\n"
         L"  \"alarms\": [\r\n",
         s->dark_mode ? L"true" : L"false",
+        s->hour24 ? L"true" : L"false",
         s->clock_style == CLOCK_ANALOG ? L"analog" : L"digital",
         s->alarms_enabled ? L"true" : L"false",
         s->alarm_count,
+        s->snooze_minutes,
+        s->winX, s->winY, s->winW, s->winH,
         s->sound_mode == SOUND_MP3 ? L"mp3" : L"simple");
 
     for (int i = 0; i < MAX_ALARMS; i++) {
         TCHAR comma = (i < MAX_ALARMS - 1) ? L',' : L' ';
         len += wsprintf(buf + len,
-            L"    {\"hour\": %d, \"minute\": %d, \"enabled\": %s}%c\r\n",
+            L"    {\"hour\": %d, \"minute\": %d, \"enabled\": %s, \"label\": \"%s\", \"repeat\": %d}%c\r\n",
             s->alarms[i].hour, s->alarms[i].minute,
-            s->alarms[i].enabled ? L"true" : L"false", comma);
+            s->alarms[i].enabled ? L"true" : L"false",
+            s->alarms[i].label,
+            s->alarms[i].repeat_mode,
+            comma);
     }
 
     len += wsprintf(buf + len, L"  ]\r\n}\r\n");

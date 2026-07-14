@@ -14,11 +14,20 @@
 #define IDC_SOUND_SIMPLE     205
 #define IDC_SOUND_MP3        206
 #define IDC_ALARM_COUNT      207
+#define IDC_HOUR24           208
+#define IDC_SNOOZE_MINUTES   209
 
 #define IDD_ALARM            300
 #define IDC_ALARM_HOUR       301
 #define IDC_ALARM_MINUTE     302
 #define IDC_ALARM_ENABLED    303
+#define IDC_ALARM_LABEL      304
+#define IDC_ALARM_REPEAT     305
+
+#define REPEAT_ONCE          0
+#define REPEAT_DAILY         1
+#define REPEAT_WEEKDAYS      2
+#define REPEAT_WEEKENDS      3
 
 #define IDM_SETTINGS         1001
 #define IDM_EXIT             1002
