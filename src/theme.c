@@ -46,11 +46,6 @@ void theme_apply(HWND hwnd, BOOL dark) {
     int backdrop = g_state.acrylic ? DWMSBT_ACRYLIC : 0;
     DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &backdrop, sizeof(backdrop));
 
-    if (g_state.acrylic) {
-        MARGINS margins = {-1, -1, -1, -1};
-        DwmExtendFrameIntoClientArea(hwnd, &margins);
-    }
-
     InvalidateRect(hwnd, NULL, TRUE);
     UpdateWindow(hwnd);
 
