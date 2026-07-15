@@ -292,22 +292,24 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     if (s->app_mode == APP_MODE_STOPWATCH) {
         RECT cb;
         cb.top = by; cb.bottom = by + bh;
-        cb.left = cx + 90; cb.right = cx + 135;
+        cb.left = cx - 135; cb.right = cx - 100;
         COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
         draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
+
+        COLORREF resetBg = RGB(0xC0, 0x50, 0x50);
 
         if (s->sw_running) {
             RECT r; r.top = by; r.bottom = by + bh;
             r.left = cx - 80; r.right = cx - 5;
             draw_button(hdc, &r, L"Stop", RGB(0xCC,0x33,0x00), RGB(255,255,255));
             r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
+            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
         } else {
             RECT r; r.top = by; r.bottom = by + bh;
             r.left = cx - 80; r.right = cx - 5;
             draw_button(hdc, &r, L"Start", RGB(0x00,0x88,0x00), RGB(255,255,255));
             r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
+            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
         }
         return;
     }
@@ -362,7 +364,6 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
         RECT cb = {cx - 135, by, cx - 100, by + bh};
         if (PtInRect(&cb, (POINT){mx, my})) {
             s->app_mode = APP_MODE_CLOCK;
-            s->cd_running = FALSE;
             InvalidateRect(hwnd, NULL, FALSE);
             return;
         }
@@ -403,10 +404,9 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_STOPWATCH) {
-        RECT cb = {cx + 90, by, cx + 135, by + bh};
+        RECT cb = {cx - 135, by, cx - 100, by + bh};
         if (PtInRect(&cb, (POINT){mx, my})) {
             s->app_mode = APP_MODE_CLOCK;
-            s->sw_running = FALSE;
             InvalidateRect(hwnd, NULL, FALSE);
             return;
         }
