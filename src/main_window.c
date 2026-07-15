@@ -321,10 +321,16 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
         draw_button(hdc, &r, L"Clock", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 
     r.left = cx - 58; r.right = cx + 10;
-    draw_button(hdc, &r, L"Timer", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
+    if (s->cd_running)
+        draw_highlighted_button(hdc, &r, L"Timer", RGB(0x20,0x80,0x20), RGB(255,255,255));
+    else
+        draw_button(hdc, &r, L"Timer", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 
     r.left = cx + 18; r.right = cx + 85;
-    draw_button(hdc, &r, L"Stopw.", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
+    if (s->sw_running)
+        draw_highlighted_button(hdc, &r, L"Stopw.", RGB(0x20,0x80,0x20), RGB(255,255,255));
+    else
+        draw_button(hdc, &r, L"Stopw.", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 }
 
 /* ---------- snooze / dismiss (forward) ---------- */
@@ -542,7 +548,8 @@ static void on_paint(HWND hwnd) {
     RECT clkInner = clockRect;
     clkInner.top += 3; clkInner.bottom -= 36;
 
-    if (g_state.app_mode == APP_MODE_COUNTDOWN) {
+    /* Always tick running countdown regardless of mode */
+    {
         DWORD now = GetTickCount();
         if (g_state.cd_running) {
             int elapsed = (int)(now - g_state.cd_last_tick);
@@ -557,6 +564,13 @@ static void on_paint(HWND hwnd) {
                 }
             }
         }
+    }
+
+    DWORD swElapsed = g_state.sw_accumulated_ms;
+    if (g_state.sw_running)
+        swElapsed += GetTickCount() - g_state.sw_start_tick;
+
+    if (g_state.app_mode == APP_MODE_COUNTDOWN) {
         COLORREF tc = g_state.clockColor;
         if (g_state.cd_remaining_ms > 0 && g_state.cd_remaining_ms < 10000)
             tc = RGB(0xFF, 0x40, 0x40);
@@ -565,9 +579,7 @@ static void on_paint(HWND hwnd) {
             tc = RGB(0xFF, 0x40, 0x40);
         clock_draw_countdown(hdcMem, &clkInner, g_state.cd_remaining_ms, tc, &g_state);
     } else if (g_state.app_mode == APP_MODE_STOPWATCH) {
-        DWORD elapsed = g_state.sw_accumulated_ms;
-        if (g_state.sw_running) elapsed += GetTickCount() - g_state.sw_start_tick;
-        clock_draw_stopwatch(hdcMem, &clkInner, elapsed, &g_state);
+        clock_draw_stopwatch(hdcMem, &clkInner, swElapsed, &g_state);
     } else if (g_state.clock_style == CLOCK_ANALOG) {
         clock_draw_analog(hdcMem, &clkInner, &st, &g_state);
     } else {
@@ -738,7 +750,7 @@ static void on_command(HWND hwnd, WPARAM wp) {
         }
         break;
     case IDM_ABOUT:
-        MessageBoxW(hwnd, L"AlarmClock\nNikolay Kisyov, 2026", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
+        MessageBoxW(hwnd, L"AlarmClock\n\nNikolay Kisyov, 2026", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
         break;
     case IDM_EXIT:
         sound_stop_alarm(s); DestroyWindow(hwnd); break;

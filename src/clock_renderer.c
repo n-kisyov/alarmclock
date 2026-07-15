@@ -301,7 +301,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipCreateFont(numFamily, (REAL)numH, FontStyleBold, UnitPixel, &numFont);
 
     GpSolidFill *numBrush = NULL;
-    ARGB numArgb = s->dark_mode ? 0xFFF0F0F0 : tickArgb;
+    ARGB numArgb = s->dark_mode ? 0xFFFFE0C0 : tickArgb;
     GdipCreateSolidFill(numArgb, &numBrush);
 
     GpStringFormat *fmt = NULL;
