@@ -81,6 +81,7 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
         else if (lstrcmp(key, L"start_minimized") == 0) json_read_bool(&r, &s->start_minimized);
         else if (lstrcmp(key, L"acrylic") == 0) json_read_bool(&r, &s->acrylic);
         else if (lstrcmp(key, L"always_on_top") == 0) json_read_bool(&r, &s->always_on_top);
+        else if (lstrcmp(key, L"alarms_collapsed") == 0) json_read_bool(&r, &s->alarms_collapsed);
         else if (lstrcmp(key, L"clock_style") == 0) { TCHAR v[32]; if (json_read_string(&r,v,32)) s->clock_style = (lstrcmp(v,L"analog")==0)?CLOCK_ANALOG:CLOCK_DIGITAL; }
         else if (lstrcmp(key, L"alarms_enabled") == 0) json_read_bool(&r, &s->alarms_enabled);
         else if (lstrcmp(key, L"alarm_count") == 0) { int ac=5; json_read_int(&r,&ac); if(ac<1)ac=1; if(ac>MAX_ALARMS)ac=MAX_ALARMS; s->alarm_count=ac; }
@@ -162,6 +163,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         L"  \"clock_style\": \"%s\",\n"
         L"  \"alarms_enabled\": %s,\n"
         L"  \"alarm_count\": %d,\n"
+        L"  \"alarms_collapsed\": %s,\n"
         L"  \"alarm_volume\": %d,\n"
         L"  \"snooze_minutes\": %d,\n"
         L"  \"app_mode\": %d,\n"
@@ -179,7 +181,8 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         s->start_minimized?L"true":L"false", s->acrylic?L"true":L"false",
         s->always_on_top?L"true":L"false",
         s->clock_style==CLOCK_ANALOG?L"analog":L"digital",
-        s->alarms_enabled?L"true":L"false", s->alarm_count, s->alarm_volume,
+        s->alarms_enabled?L"true":L"false", s->alarm_count,
+        s->alarms_collapsed?L"true":L"false", s->alarm_volume,
         s->snooze_minutes, s->app_mode, s->winX, s->winY, s->winW, s->winH,
         s->sound_mode==SOUND_MP3?L"mp3":L"simple",
         s->cd_hours, s->cd_mins, s->cd_secs);

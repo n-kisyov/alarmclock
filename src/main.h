@@ -56,6 +56,7 @@ typedef struct {
     int      cd_remaining_ms;
     BOOL     cd_running;
     DWORD    cd_last_tick;
+    BOOL     alarms_collapsed;
 
     /* Stopwatch state */
     BOOL     sw_running;

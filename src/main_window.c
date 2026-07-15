@@ -63,8 +63,11 @@ static void calc_alarm_rects(HWND hwnd, RECT *panel, RECT *header, RECT *srcCloc
     int panX = ALARM_PAD_X;
     int panY = sepY + 4;
     int availH = cr.bottom - panY - ALARM_PAD_Y;
-    int minH = ALARM_HEADER_H + 6 + ALARM_ROW_H + 6;
-    int maxH = ALARM_HEADER_H + 6 + g_state.alarm_count * ALARM_ROW_H + 6;
+
+    int rowCount = g_state.alarms_collapsed ? 0 : g_state.alarm_count;
+    int minH = ALARM_HEADER_H + 17;
+    int maxH = ALARM_HEADER_H + 6 + rowCount * ALARM_ROW_H + 21;
+
     int panH = availH;
     if (panH < minH) panH = minH;
     if (panH > maxH) panH = maxH;
@@ -140,11 +143,26 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
     HPEN   hOldPn = (HPEN)SelectObject(hdc, GetStockObject(NULL_PEN));
     Rectangle(hdc, panel.left, panel.top, panel.right, panel.bottom);
 
+    /* Header with collapse arrow */
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, s->textColor);
     HFONT hOldFont = (HFONT)SelectObject(hdc, s->hGuiFont);
-    DrawText(hdc, L"Alarms", -1, &header, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    RECT hdr = header;
+    hdr.right -= 26;
+    DrawText(hdc, L"Alarms", -1, &hdr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    WCHAR *arrow = s->alarms_collapsed ? L"\x25B6" : L"\x25BC";
+    hdr = header;
+    hdr.left = hdr.right - 22;
+    DrawText(hdc, arrow, 1, &hdr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
+
+    if (s->alarms_collapsed) {
+        SelectObject(hdc, hOldBr);
+        SelectObject(hdc, hOldPn);
+        return;
+    }
 
     for (int i = 0; i < s->alarm_count; i++) {
         RECT rowR  = get_alarm_row_rect(&panel, &header, i);
@@ -553,6 +571,34 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
 
     RECT panel, header;
     calc_alarm_rects(hwnd, &panel, &header, &clockRect);
+
+    /* Collapse arrow hit test */
+    RECT arrowR = header;
+    arrowR.left = arrowR.right - 24;
+    if (PtInRect(&arrowR, (POINT){mx, my})) {
+        g_state.alarms_collapsed = !g_state.alarms_collapsed;
+
+        /* Resize window to fit */
+        int panelH = ALARM_HEADER_H + 17;
+        if (!g_state.alarms_collapsed)
+            panelH = ALARM_HEADER_H + g_state.alarm_count * ALARM_ROW_H + 27;
+
+        int clientH = g_state.clockAreaH + 4 + panelH;
+
+        RECT wr, cr;
+        GetWindowRect(hwnd, &wr);
+        GetClientRect(hwnd, &cr);
+        int chromeH = (wr.bottom - wr.top) - (cr.bottom - cr.top);
+
+        if (!IsZoomed(hwnd)) {
+            SetWindowPos(hwnd, NULL, 0, 0, wr.right - wr.left,
+                         clientH + chromeH, SWP_NOMOVE | SWP_NOZORDER);
+        }
+
+        InvalidateRect(hwnd, NULL, FALSE);
+        return;
+    }
+
     for (int i = 0; i < g_state.alarm_count; i++) {
         RECT rowR = get_alarm_row_rect(&panel, &header, i);
         RECT chkR = get_check_rect(&rowR);
