@@ -54,13 +54,15 @@ void tray_update_tooltip(AppState *s) {
 
         int alarmMin = s->alarms[i].hour * 60 + s->alarms[i].minute;
 
-        if (s->alarms[i].repeat_mode == REPEAT_ONCE) {
+        if (s->alarms[i].repeat_days == 0) {
             if (alarmMin <= nowMin) continue;
         }
-        if (s->alarms[i].repeat_mode == REPEAT_WEEKDAYS &&
-            (today == 0 || today == 6)) continue;
-        if (s->alarms[i].repeat_mode == REPEAT_WEEKENDS &&
-            (today >= 1 && today <= 5)) continue;
+        if (s->alarms[i].repeat_days != 0x7F) {
+            int rd = s->alarms[i].repeat_days;
+            if (rd == 0x3E && (today == 0 || today == 6)) continue;
+            if (rd == 0x41 && (today >= 1 && today <= 5)) continue;
+            if (!(rd & (1 << today))) continue;
+        }
 
         if (bestHour == ALARM_UNSET || alarmMin < bestHour * 60 + bestMin) {
             bestHour = s->alarms[i].hour;

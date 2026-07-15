@@ -2,8 +2,9 @@
 #include "main.h"
 #include "theme.h"
 
-static const TCHAR *repeat_items[] = {
-    L"Once", L"Daily", L"Weekdays", L"Weekends"
+static const int dayIds[7] = {
+    IDC_DAY_SUN, IDC_DAY_MON, IDC_DAY_TUE, IDC_DAY_WED,
+    IDC_DAY_THU, IDC_DAY_FRI, IDC_DAY_SAT
 };
 
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
@@ -32,12 +33,9 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             buf[0] = 0;
         SetDlgItemText(hDlg, IDC_ALARM_MINUTE, buf);
 
-        {
-            HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_REPEAT);
-            for (int i = 0; i < 4; i++) {
-                SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)repeat_items[i]);
-            }
-            SendMessageW(hCombo, CB_SETCURSEL, data->repeat_mode, 0);
+        for (int i = 0; i < 7; i++) {
+            CheckDlgButton(hDlg, dayIds[i],
+                (data->repeat_days & (1 << i)) ? BST_CHECKED : BST_UNCHECKED);
         }
 
         CheckDlgButton(hDlg, IDC_ALARM_ENABLED, data->enabled ? BST_CHECKED : BST_UNCHECKED);
@@ -61,60 +59,20 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLORDLG:
         return (INT_PTR)g_state.hBgBrush;
 
-    case WM_MEASUREITEM: {
-        MEASUREITEMSTRUCT *mis = (MEASUREITEMSTRUCT *)lp;
-        if (mis->CtlType == ODT_COMBOBOX) {
-            mis->itemHeight = 20;
-            return TRUE;
-        }
-        break;
-    }
-
-    case WM_DRAWITEM: {
-        DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
-        if (dis->CtlType != ODT_COMBOBOX) break;
-
-        TCHAR buf[32];
-        if (dis->itemID == (UINT)-1 ||
-            SendMessageW(dis->hwndItem, CB_GETLBTEXT, dis->itemID, (LPARAM)buf) == CB_ERR) {
-            buf[0] = 0;
-        }
-
-        BOOL isField = (dis->itemState & ODS_COMBOBOXEDIT) != 0;
-        AppState *s = &g_state;
-
-        COLORREF bg, fg;
-        if (dis->itemState & ODS_SELECTED && !isField) {
-            bg = s->accentColor;
-            fg = RGB(255, 255, 255);
-        } else {
-            bg = isField ? s->panelBgColor : s->bgColor;
-            fg = s->textColor;
-        }
-
-        HBRUSH hBr = CreateSolidBrush(bg);
-        FillRect(dis->hDC, &dis->rcItem, hBr);
-        DeleteObject(hBr);
-
-        SetBkMode(dis->hDC, TRANSPARENT);
-        SetTextColor(dis->hDC, fg);
-
-        RECT rc = dis->rcItem;
-        rc.left += 4;
-        DrawTextW(dis->hDC, buf, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        if ((dis->itemState & ODS_FOCUS) && !isField) {
-            DrawFocusRect(dis->hDC, &dis->rcItem);
-        }
-
-        return TRUE;
-    }
-
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case IDC_DAY_ALL:
+            for (int i = 0; i < 7; i++)
+                CheckDlgButton(hDlg, dayIds[i], BST_CHECKED);
+            return TRUE;
+
+        case IDC_DAY_NONE:
+            for (int i = 0; i < 7; i++)
+                CheckDlgButton(hDlg, dayIds[i], BST_UNCHECKED);
+            return TRUE;
+
         case IDOK: {
             TCHAR buf[64];
-
             GetDlgItemTextW(hDlg, IDC_ALARM_LABEL, data->label, 31);
             data->label[31] = 0;
 
@@ -129,14 +87,14 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 return TRUE;
             }
 
-            data->hour    = h;
-            data->minute  = m;
+            data->hour   = h;
+            data->minute = m;
             data->enabled = (IsDlgButtonChecked(hDlg, IDC_ALARM_ENABLED) == BST_CHECKED);
 
-            {
-                HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_REPEAT);
-                int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
-                if (sel >= 0) data->repeat_mode = sel;
+            data->repeat_days = 0;
+            for (int i = 0; i < 7; i++) {
+                if (IsDlgButtonChecked(hDlg, dayIds[i]) == BST_CHECKED)
+                    data->repeat_days |= (1 << i);
             }
 
             EndDialog(hDlg, IDOK);

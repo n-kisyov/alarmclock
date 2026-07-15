@@ -22,7 +22,7 @@ typedef struct {
     int   minute;
     BOOL  enabled;
     WCHAR label[32];
-    int   repeat_mode;
+    BYTE  repeat_days;
 } Alarm;
 
 typedef struct {
@@ -36,9 +36,12 @@ typedef struct {
     BOOL     autostart;
     BOOL     start_minimized;
     BOOL     acrylic;
+    BOOL     always_on_top;
+    int      alarm_volume;
     int      snooze_minutes;
     Alarm    alarms[MAX_ALARMS];
 
+    int      app_mode;
     int      winX, winY, winW, winH;
 
     BOOL     alarm_active;
@@ -47,6 +50,17 @@ typedef struct {
     BOOL     snooze_pending;
     DWORD    snooze_end_ms;
     int      snooze_total_sec;
+
+    /* Countdown state */
+    int      cd_hours, cd_mins, cd_secs;
+    int      cd_remaining_ms;
+    BOOL     cd_running;
+    DWORD    cd_last_tick;
+
+    /* Stopwatch state */
+    BOOL     sw_running;
+    DWORD    sw_start_tick;
+    DWORD    sw_accumulated_ms;
 
     HWND     hMainWnd;
     HFONT    hClockFont;
@@ -69,6 +83,7 @@ typedef struct {
     HANDLE   hSoundThread;
     HANDLE   hCrescendoThread;
     BOOL     stop_sound;
+    BOOL     sound_preview;
 
     TCHAR    exe_dir[MAX_PATH];
 } AppState;
@@ -88,6 +103,8 @@ BOOL   alarms_check(AppState *s, const SYSTEMTIME *st);
 
 void   clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
 void   clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
+void   clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc, const AppState *s);
+void   clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppState *s);
 
 void   tray_create(HWND hwnd, AppState *s);
 void   tray_remove(AppState *s);
@@ -102,6 +119,7 @@ void   autostart_update(AppState *s);
 
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
+INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 
 LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 

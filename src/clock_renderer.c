@@ -7,7 +7,6 @@
 void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s) {
 
     TCHAR timeBuf[16];
-    TCHAR dateBuf[64];
     WCHAR ampm[4] = L"";
 
     int h = st->wHour;
@@ -19,6 +18,8 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     }
     wsprintf(timeBuf, L"%02d:%02d:%02d", h, st->wMinute, st->wSecond);
 
+    /* Date */
+    TCHAR dateBuf[64];
     const TCHAR *months[] = {
         L"January", L"February", L"March", L"April", L"May", L"June",
         L"July", L"August", L"September", L"October", L"November", L"December"
@@ -46,9 +47,8 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     SIZE timeSize;
     GetTextExtentPoint32W(hdc, timeBuf, lstrlenW(timeBuf), &timeSize);
 
-    /* Measure AM/PM width in small font if needed */
-    int ampmW = 0;
-    int ampmH = 0;
+    /* Measure AM/PM width */
+    int ampmW = 0, ampmH = 0;
     TEXTMETRICW tmAm;
     if (ampm[0]) {
         ampmH = tmClock.tmHeight / 5;
@@ -96,6 +96,60 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     SelectObject(hdc, hOldFont);
 }
 
+void clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc, const AppState *s) {
+    int totalSec = remaining_ms / 1000;
+    int hh = totalSec / 3600;
+    int mm = (totalSec % 3600) / 60;
+    int ss = totalSec % 60;
+
+    TCHAR buf[16];
+    if (hh > 0)
+        wsprintf(buf, L"%02d:%02d:%02d", hh, mm, ss);
+    else
+        wsprintf(buf, L"%02d:%02d", mm, ss);
+
+    SetBkMode(hdc, TRANSPARENT);
+
+    HFONT hOldFont = (HFONT)SelectObject(hdc, s->hClockFont);
+    SIZE timeSize;
+    GetTextExtentPoint32W(hdc, buf, lstrlenW(buf), &timeSize);
+
+    int cx = (rc->left + rc->right) / 2;
+    int startY = rc->top + (rc->bottom - rc->top - timeSize.cy) / 2;
+
+    SetTextColor(hdc, tc);
+    ExtTextOutW(hdc, cx - timeSize.cx / 2, startY, 0, NULL, buf, lstrlenW(buf), NULL);
+
+    SelectObject(hdc, hOldFont);
+}
+
+void clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppState *s) {
+    DWORD cs = (elapsed_ms / 10) % 100;
+    DWORD sec = (elapsed_ms / 1000) % 60;
+    DWORD min = (elapsed_ms / 60000) % 60;
+    DWORD hr  = elapsed_ms / 3600000;
+
+    TCHAR buf[24];
+    if (hr > 0)
+        wsprintf(buf, L"%02d:%02d:%02d.%02d", (int)hr, (int)min, (int)sec, (int)cs);
+    else
+        wsprintf(buf, L"%02d:%02d.%02d", (int)min, (int)sec, (int)cs);
+
+    SetBkMode(hdc, TRANSPARENT);
+
+    HFONT hOldFont = (HFONT)SelectObject(hdc, s->hClockFont);
+    SIZE timeSize;
+    GetTextExtentPoint32W(hdc, buf, lstrlenW(buf), &timeSize);
+
+    int cx = (rc->left + rc->right) / 2;
+    int startY = rc->top + (rc->bottom - rc->top - timeSize.cy) / 2;
+
+    SetTextColor(hdc, s->clockColor);
+    ExtTextOutW(hdc, cx - timeSize.cx / 2, startY, 0, NULL, buf, lstrlenW(buf), NULL);
+
+    SelectObject(hdc, hOldFont);
+}
+
 void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s) {
 
     int w = rc->right - rc->left;
@@ -105,7 +159,6 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     int r  = (w < h ? w : h) / 2 - 8;
     if (r < 30) r = 30;
 
-    /* Smooth sub-second time using GetTickCount */
     DWORD tick = GetTickCount();
     double msFrac = (tick % 1000) / 1000.0;
     double secFrac = st->wSecond + msFrac;
@@ -116,17 +169,14 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     double minuteAngle = minFrac * (M_PI / 30.0)   - M_PI / 2.0;
     double secondAngle = secFrac * (M_PI / 30.0)   - M_PI / 2.0;
 
-    /* Face outline */
     HPEN hPen = CreatePen(PS_SOLID, 3, s->accentColor);
     HPEN hOldPen = (HPEN)SelectObject(hdc, hPen);
     HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
 
-    /* Tick marks */
     for (int i = 0; i < 60; i++) {
         double a = i * M_PI / 30.0 - M_PI / 2.0;
         double ca = cos(a), sa = sin(a);
-
         if (i % 5 == 0) {
             HPEN hTick = CreatePen(PS_SOLID, 3, s->textColor);
             SelectObject(hdc, hTick);
@@ -142,7 +192,6 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
         }
     }
 
-    /* Hour numbers */
     int numH = r / 8;
     if (numH < 12) numH = 12;
     HFONT hNumFont = CreateFontW(
@@ -167,7 +216,6 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     SelectObject(hdc, hOldNum);
     DeleteObject(hNumFont);
 
-    /* Hands */
     int hLen = (int)(r * 0.50);
     int mLen = (int)(r * 0.75);
     int sLen = (int)(r * 0.82);
@@ -190,7 +238,6 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     LineTo(hdc, cx + (int)(hLen * cos(hourAngle)), cy + (int)(hLen * sin(hourAngle)));
     DeleteObject(hHour);
 
-    /* Center dot */
     HPEN hDot = CreatePen(PS_SOLID, 5, s->accentColor);
     SelectObject(hdc, hDot);
     MoveToEx(hdc, cx, cy, NULL);

@@ -46,6 +46,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_state.hour24          = TRUE;
     g_state.snooze_minutes  = 3;
     g_state.acrylic         = TRUE;
+    g_state.app_mode        = APP_MODE_CLOCK;
+    g_state.alarm_volume    = 80;
 
     GetModuleFileNameW(NULL, g_state.exe_dir, MAX_PATH);
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
@@ -77,7 +79,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
 
     HWND hwnd = CreateWindowExW(
-        0, APP_CLASS, APP_NAME,
+        g_state.always_on_top ? WS_EX_TOPMOST : 0,
+        APP_CLASS, APP_NAME,
         WS_OVERLAPPEDWINDOW,
         g_state.winX, g_state.winY, g_state.winW, g_state.winH,
         NULL, NULL, hInstance, NULL);

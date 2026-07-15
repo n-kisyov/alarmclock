@@ -1,12 +1,19 @@
 #include "settings_dialog.h"
 #include "main.h"
 #include "theme.h"
+#include "sound.h"
 
 static const TCHAR *snooze_items[] = {
     L"1", L"2", L"3", L"5", L"10", L"15", L"20", L"30"
 };
 static const int snooze_values[] = {1, 2, 3, 5, 10, 15, 20, 30};
 static const int snooze_count = 8;
+
+static const TCHAR *vol_items[] = {
+    L"10%", L"20%", L"30%", L"40%", L"50%", L"60%", L"70%", L"80%", L"90%", L"100%"
+};
+static const int vol_values[] = {10,20,30,40,50,60,70,80,90,100};
+static const int vol_count = 10;
 
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     static AppState *s;
@@ -24,6 +31,7 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         CheckDlgButton(hDlg, IDC_AUTOSTART,      s->autostart ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_START_MINIMIZED,s->start_minimized ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(hDlg, IDC_ACRYLIC,        s->acrylic ? BST_CHECKED : BST_UNCHECKED);
+        CheckDlgButton(hDlg, IDC_ALWAYS_ON_TOP,  s->always_on_top ? BST_CHECKED : BST_UNCHECKED);
 
         if (s->clock_style == CLOCK_ANALOG)
             CheckDlgButton(hDlg, IDC_CLOCK_ANALOG, BST_CHECKED);
@@ -38,19 +46,26 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         {
             HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_COUNT);
             for (int i = 1; i <= MAX_ALARMS; i++) {
-                TCHAR buf[4];
-                wsprintf(buf, L"%d", i);
+                TCHAR buf[4]; wsprintf(buf, L"%d", i);
                 SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)buf);
             }
             SendMessageW(hCombo, CB_SETCURSEL, s->alarm_count - 1, 0);
         }
-
         {
             HWND hCombo = GetDlgItem(hDlg, IDC_SNOOZE_MINUTES);
             int sel = 0;
             for (int i = 0; i < snooze_count; i++) {
                 SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)snooze_items[i]);
                 if (snooze_values[i] == s->snooze_minutes) sel = i;
+            }
+            SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
+        }
+        {
+            HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_VOLUME);
+            int sel = 0;
+            for (int i = 0; i < vol_count; i++) {
+                SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)vol_items[i]);
+                if (vol_values[i] == s->alarm_volume) sel = i;
             }
             SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
         }
@@ -92,33 +107,23 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageW(dis->hwndItem, CB_GETLBTEXT, dis->itemID, (LPARAM)buf) == CB_ERR) {
             buf[0] = 0;
         }
-
         BOOL isField = (dis->itemState & ODS_COMBOBOXEDIT) != 0;
-
         COLORREF bg, fg;
         if (dis->itemState & ODS_SELECTED && !isField) {
-            bg = s->accentColor;
-            fg = RGB(255, 255, 255);
+            bg = s->accentColor; fg = RGB(255, 255, 255);
         } else {
             bg = isField ? s->panelBgColor : s->bgColor;
             fg = s->textColor;
         }
-
         HBRUSH hBr = CreateSolidBrush(bg);
         FillRect(dis->hDC, &dis->rcItem, hBr);
         DeleteObject(hBr);
-
         SetBkMode(dis->hDC, TRANSPARENT);
         SetTextColor(dis->hDC, fg);
-
-        RECT rc = dis->rcItem;
-        rc.left += 4;
+        RECT rc = dis->rcItem; rc.left += 4;
         DrawTextW(dis->hDC, buf, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-        if ((dis->itemState & ODS_FOCUS) && !isField) {
+        if ((dis->itemState & ODS_FOCUS) && !isField)
             DrawFocusRect(dis->hDC, &dis->rcItem);
-        }
-
         return TRUE;
     }
 
@@ -136,6 +141,9 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
             BOOL acrylicChanged = (IsDlgButtonChecked(hDlg, IDC_ACRYLIC) == BST_CHECKED) != s->acrylic;
             s->acrylic = (IsDlgButtonChecked(hDlg, IDC_ACRYLIC) == BST_CHECKED);
+
+            BOOL topChanged = (IsDlgButtonChecked(hDlg, IDC_ALWAYS_ON_TOP) == BST_CHECKED) != s->always_on_top;
+            s->always_on_top = (IsDlgButtonChecked(hDlg, IDC_ALWAYS_ON_TOP) == BST_CHECKED);
 
             int newStyle = (IsDlgButtonChecked(hDlg, IDC_CLOCK_ANALOG) == BST_CHECKED)
                 ? CLOCK_ANALOG : CLOCK_DIGITAL;
@@ -157,6 +165,11 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < snooze_count) s->snooze_minutes = snooze_values[sel];
             }
+            {
+                HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_VOLUME);
+                int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < vol_count) s->alarm_volume = vol_values[sel];
+            }
 
             if (newAutostart != s->autostart) {
                 s->autostart = newAutostart;
@@ -166,6 +179,11 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             theme_update_colors(s);
 
             if (darkChanged || acrylicChanged) theme_apply(s->hMainWnd, s->dark_mode);
+
+            if (topChanged) {
+                SetWindowPos(s->hMainWnd, s->always_on_top ? HWND_TOPMOST : HWND_NOTOPMOST,
+                             0,0,0,0, SWP_NOMOVE|SWP_NOSIZE);
+            }
 
             if (styleChanged) {
                 int w = (newStyle == CLOCK_ANALOG) ? 500 : 720;
@@ -180,6 +198,14 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         case IDCANCEL:
             EndDialog(hDlg, IDCANCEL);
             return TRUE;
+
+        case IDC_PREVIEW_SOUND: {
+            if (s->hSoundThread) return TRUE;
+            s->sound_preview = TRUE;
+            s->stop_sound = FALSE;
+            sound_play_alarm(s);
+            return TRUE;
+        }
         }
         break;
     }

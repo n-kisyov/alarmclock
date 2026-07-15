@@ -8,7 +8,7 @@ typedef struct {
     int   minute;
     BOOL  enabled;
     WCHAR label[32];
-    int   repeat_mode;
+    BYTE  repeat_days;
 } AlarmEditData;
 
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);

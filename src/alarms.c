@@ -7,7 +7,7 @@ void alarms_init(AppState *s) {
         s->alarms[i].minute      = ALARM_UNSET;
         s->alarms[i].enabled     = FALSE;
         s->alarms[i].label[0]    = 0;
-        s->alarms[i].repeat_mode = REPEAT_ONCE;
+        s->alarms[i].repeat_days = 0;
     }
 }
 
@@ -25,14 +25,12 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st) {
             s->alarms[i].hour == ALARM_UNSET)
             continue;
 
-        int rm = s->alarms[i].repeat_mode;
-        if (rm != REPEAT_ONCE && rm != REPEAT_DAILY) {
-            int dow = st->wDayOfWeek;
-            if (rm == REPEAT_WEEKDAYS && (dow == 0 || dow == 6)) continue;
-            if (rm == REPEAT_WEEKENDS  && (dow >= 1 && dow <= 5)) continue;
+        if (s->alarms[i].repeat_days != 0) {
+            int dayBit = 1 << st->wDayOfWeek;
+            if (!(s->alarms[i].repeat_days & dayBit)) continue;
+        } else {
+            s->alarms[i].enabled = FALSE;
         }
-
-        if (rm == REPEAT_ONCE) s->alarms[i].enabled = FALSE;
 
         s->alarm_active = TRUE;
         s->last_fire_min = nowMin;
