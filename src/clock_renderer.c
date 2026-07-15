@@ -159,11 +159,21 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppS
     int r  = (w < h ? w : h) / 2 - 8;
     if (r < 30) r = 30;
 
-    DWORD tick = GetTickCount();
-    double msFrac = (tick % 1000) / 1000.0;
-    double secFrac = st->wSecond + msFrac;
-    double minFrac = st->wMinute + secFrac / 60.0;
-    double hourFrac = (st->wHour % 12) + minFrac / 60.0;
+    FILETIME ft;
+    GetSystemTimePreciseAsFileTime(&ft);
+
+    ULARGE_INTEGER uli;
+    uli.LowPart  = ft.dwLowDateTime;
+    uli.HighPart = ft.dwHighDateTime;
+    ULONGLONG fileTimeMs = uli.QuadPart / 10000;
+
+    SYSTEMTIME lt;
+    FileTimeToSystemTime(&ft, &lt);
+
+    double msFrac = (double)(fileTimeMs % 1000) / 1000.0;
+    double secFrac = lt.wSecond + msFrac;
+    double minFrac = lt.wMinute + secFrac / 60.0;
+    double hourFrac = (lt.wHour % 12) + minFrac / 60.0;
 
     double hourAngle   = hourFrac * (M_PI / 6.0)   - M_PI / 2.0;
     double minuteAngle = minFrac * (M_PI / 30.0)   - M_PI / 2.0;
