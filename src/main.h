@@ -102,6 +102,8 @@ BOOL   json_save_settings(const AppState *s, const TCHAR *path);
 void   alarms_init(AppState *s);
 BOOL   alarms_check(AppState *s, const SYSTEMTIME *st);
 
+void   clock_init(void);
+void   clock_cleanup(void);
 void   clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
 void   clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const AppState *s);
 void   clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc, const AppState *s);

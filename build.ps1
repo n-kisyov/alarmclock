@@ -12,6 +12,7 @@ $OutExe   = Join-Path $ProjRoot "alarmclock.exe"
 
 $MSysRoot = "C:\msys64\ucrt64"
 $GccPath  = Join-Path $MSysRoot "bin\gcc.exe"
+$GppPath  = Join-Path $MSysRoot "bin\g++.exe"
 $WrPath   = Join-Path $MSysRoot "bin\windres.exe"
 
 if ($Clean) {
@@ -94,7 +95,7 @@ $ArgsLink = @(
     "-o", $OutExe
 ) + $LinkObjs + @(
     "-mwindows", "-O2",
-    "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lmsimg32"
+    "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lmsimg32", "-lgdiplus"
 )
 & $GccPath @ArgsLink
 if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }

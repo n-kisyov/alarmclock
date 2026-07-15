@@ -193,9 +193,11 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             EndDialog(hDlg, IDOK);
+            sound_stop_alarm(s);
             return TRUE;
         }
         case IDCANCEL:
+            sound_stop_alarm(s);
             EndDialog(hDlg, IDCANCEL);
             return TRUE;
 
@@ -206,6 +208,14 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             sound_play_alarm(s);
             return TRUE;
         }
+
+        case IDC_SOUND_SIMPLE:
+            if (HIWORD(wp) == BN_CLICKED) s->sound_mode = SOUND_SIMPLE;
+            break;
+
+        case IDC_SOUND_MP3:
+            if (HIWORD(wp) == BN_CLICKED) s->sound_mode = SOUND_MP3;
+            break;
         }
         break;
     }

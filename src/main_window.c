@@ -254,27 +254,37 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_COUNTDOWN) {
+        /* Clock return button on the far left */
         RECT cb;
         cb.top = by; cb.bottom = by + bh;
-        cb.left = cx + 90; cb.right = cx + 135;
+        cb.left = cx - 135; cb.right = cx - 100;
         COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
         draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
+
+        COLORREF resetBg = RGB(0xC0, 0x50, 0x50);
 
         if (s->cd_running) {
             RECT r; r.top = by; r.bottom = by + bh;
             r.left = cx - 80; r.right = cx - 5;
             draw_button(hdc, &r, L"Pause", s->accentColor, RGB(255,255,255));
             r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
+            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
         } else {
+            int bw = 56, gap = 6;
+            int total = 3 * bw + 2 * gap;
+            int bx = cx - total / 2;
             RECT r; r.top = by; r.bottom = by + bh;
-            r.left = cx - 80; r.right = cx - 5;
-            if (s->cd_remaining_ms > 0)
+
+            if (s->cd_remaining_ms > 0) {
+                r.left = bx; r.right = bx + bw;
                 draw_button(hdc, &r, L"Start", RGB(0x00,0x88,0x00), RGB(255,255,255));
-            else
-                draw_button(hdc, &r, L"Set", s->accentColor, RGB(255,255,255));
-            r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
+                bx += bw + gap;
+            }
+            r.left = bx; r.right = bx + bw;
+            draw_button(hdc, &r, L"Set", s->accentColor, RGB(255,255,255));
+            bx += bw + gap;
+            r.left = bx; r.right = bx + bw;
+            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
         }
         return;
     }
@@ -343,7 +353,7 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_COUNTDOWN) {
-        RECT cb = {cx + 90, by, cx + 135, by + bh};
+        RECT cb = {cx - 135, by, cx - 100, by + bh};
         if (PtInRect(&cb, (POINT){mx, my})) {
             s->app_mode = APP_MODE_CLOCK;
             s->cd_running = FALSE;
@@ -360,16 +370,27 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
                 InvalidateRect(hwnd,NULL,FALSE); return;
             }
         } else {
-            RECT r = {cx - 80, by, cx - 5, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                if (s->cd_remaining_ms > 0) {
-                    s->cd_running = TRUE; s->cd_last_tick = GetTickCount();
-                } else {
-                    DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_COUNTDOWN_SET),
-                                    hwnd, cd_set_dlg_proc, (LPARAM)s);
-                    InvalidateRect(hwnd,NULL,FALSE);
-                }
+            int bw = 56, gap = 6;
+            int total = 3 * bw + 2 * gap;
+            int bx = cx - total / 2;
+
+            RECT setR = {bx, by, bx + bw, by + bh};
+            if (s->cd_remaining_ms > 0) {
+                bx += bw + gap;
+                setR = (RECT){bx, by, bx + bw, by + bh};
+            }
+            if (PtInRect(&setR, (POINT){mx, my})) {
+                DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_COUNTDOWN_SET),
+                                hwnd, cd_set_dlg_proc, (LPARAM)s);
+                InvalidateRect(hwnd,NULL,FALSE);
                 return;
+            }
+            if (s->cd_remaining_ms > 0) {
+                RECT startR = {cx - total/2, by, cx - total/2 + bw, by + bh};
+                if (PtInRect(&startR, (POINT){mx, my})) {
+                    s->cd_running = TRUE; s->cd_last_tick = GetTickCount();
+                    InvalidateRect(hwnd,NULL,FALSE); return;
+                }
             }
         }
         return;
@@ -530,11 +551,18 @@ static void on_paint(HWND hwnd) {
             if (g_state.cd_remaining_ms <= 0) {
                 g_state.cd_remaining_ms = 0;
                 g_state.cd_running = FALSE;
-                g_state.alarm_active = TRUE;
-                sound_play_alarm(&g_state);
+                if (!g_state.alarm_active) {
+                    g_state.alarm_active = TRUE;
+                    sound_play_alarm(&g_state);
+                }
             }
         }
-        COLORREF tc = g_state.cd_remaining_ms < 10000 ? RGB(0xFF,0x40,0x40) : g_state.clockColor;
+        COLORREF tc = g_state.clockColor;
+        if (g_state.cd_remaining_ms > 0 && g_state.cd_remaining_ms < 10000)
+            tc = RGB(0xFF, 0x40, 0x40);
+        else if (g_state.cd_remaining_ms <= 0 &&
+                 (g_state.cd_hours + g_state.cd_mins + g_state.cd_secs > 0))
+            tc = RGB(0xFF, 0x40, 0x40);
         clock_draw_countdown(hdcMem, &clkInner, g_state.cd_remaining_ms, tc, &g_state);
     } else if (g_state.app_mode == APP_MODE_STOPWATCH) {
         DWORD elapsed = g_state.sw_accumulated_ms;
@@ -710,7 +738,7 @@ static void on_command(HWND hwnd, WPARAM wp) {
         }
         break;
     case IDM_ABOUT:
-        MessageBoxW(hwnd, L"AlarmClock v1.2\nA simple alarm clock for Windows.", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
+        MessageBoxW(hwnd, L"AlarmClock\nNikolay Kisyov, 2026", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
         break;
     case IDM_EXIT:
         sound_stop_alarm(s); DestroyWindow(hwnd); break;
@@ -837,6 +865,7 @@ static void on_destroy(HWND hwnd) {
     if (s->hBgBrush)   DeleteObject(s->hBgBrush);
     if (s->hPanelBrush)DeleteObject(s->hPanelBrush);
 
+    clock_cleanup();
     PostQuitMessage(0);
 }
 

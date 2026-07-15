@@ -1,6 +1,7 @@
 #include "main.h"
 #include "theme.h"
 #include "settings_data.h"
+#include "clock_renderer.h"
 #include <dwmapi.h>
 
 AppState g_state;
@@ -38,6 +39,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     icc.dwICC  = ICC_STANDARD_CLASSES;
     InitCommonControlsEx(&icc);
 
+    clock_init();
+
     ZeroMemory(&g_state, sizeof(g_state));
     g_state.clock_style     = CLOCK_DIGITAL;
     g_state.sound_mode      = SOUND_SIMPLE;
@@ -54,6 +57,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     if (slash) *slash = 0;
 
     settings_load(&g_state);
+
+    /* Initialize countdown display from saved config */
+    if (g_state.cd_remaining_ms == 0)
+        g_state.cd_remaining_ms = (g_state.cd_hours*3600 + g_state.cd_mins*60 + g_state.cd_secs)*1000;
 
     WNDCLASSEXW wc = {0};
     wc.cbSize        = sizeof(WNDCLASSEXW);
