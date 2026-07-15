@@ -236,6 +236,12 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_COUNTDOWN) {
+        RECT cb;
+        cb.top = by; cb.bottom = by + bh;
+        cb.left = cx + 90; cb.right = cx + 135;
+        COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
+        draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
+
         if (s->cd_running) {
             RECT r; r.top = by; r.bottom = by + bh;
             r.left = cx - 80; r.right = cx - 5;
@@ -244,21 +250,24 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
             draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
         } else {
             RECT r; r.top = by; r.bottom = by + bh;
-            r.left = cx - 125; r.right = cx - 55;
+            r.left = cx - 80; r.right = cx - 5;
             if (s->cd_remaining_ms > 0)
                 draw_button(hdc, &r, L"Start", RGB(0x00,0x88,0x00), RGB(255,255,255));
             else
                 draw_button(hdc, &r, L"Set", s->accentColor, RGB(255,255,255));
-            r.left = cx - 48; r.right = cx - 0;
+            r.left = cx + 5; r.right = cx + 80;
             draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
-            r.left = cx + 5; r.right = cx + 125;
-            if (s->cd_remaining_ms > 0)
-                draw_button(hdc, &r, L"Reset", s->dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xD0,0xD0,0xD0), s->textColor);
         }
         return;
     }
 
     if (s->app_mode == APP_MODE_STOPWATCH) {
+        RECT cb;
+        cb.top = by; cb.bottom = by + bh;
+        cb.left = cx + 90; cb.right = cx + 135;
+        COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
+        draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
+
         if (s->sw_running) {
             RECT r; r.top = by; r.bottom = by + bh;
             r.left = cx - 80; r.right = cx - 5;
@@ -287,7 +296,7 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     draw_button(hdc, &r, L"Timer", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 
     r.left = cx + 18; r.right = cx + 85;
-    draw_button(hdc, &r, L"Watch", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
+    draw_button(hdc, &r, L"Stopw.", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 }
 
 /* ---------- snooze / dismiss (forward) ---------- */
@@ -316,9 +325,15 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_COUNTDOWN) {
-        RECT r;
+        RECT cb = {cx + 90, by, cx + 135, by + bh};
+        if (PtInRect(&cb, (POINT){mx, my})) {
+            s->app_mode = APP_MODE_CLOCK;
+            s->cd_running = FALSE;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
         if (s->cd_running) {
-            r = (RECT){cx - 80, by, cx - 5, by + bh};
+            RECT r = {cx - 80, by, cx - 5, by + bh};
             if (PtInRect(&r, (POINT){mx, my})) { s->cd_running = FALSE; InvalidateRect(hwnd,NULL,FALSE); return; }
             r = (RECT){cx + 5, by, cx + 80, by + bh};
             if (PtInRect(&r, (POINT){mx, my})) {
@@ -327,7 +342,7 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
                 InvalidateRect(hwnd,NULL,FALSE); return;
             }
         } else {
-            r = (RECT){cx - 125, by, cx - 55, by + bh};
+            RECT r = {cx - 80, by, cx - 5, by + bh};
             if (PtInRect(&r, (POINT){mx, my})) {
                 if (s->cd_remaining_ms > 0) {
                     s->cd_running = TRUE; s->cd_last_tick = GetTickCount();
@@ -343,9 +358,15 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
     }
 
     if (s->app_mode == APP_MODE_STOPWATCH) {
-        RECT r;
+        RECT cb = {cx + 90, by, cx + 135, by + bh};
+        if (PtInRect(&cb, (POINT){mx, my})) {
+            s->app_mode = APP_MODE_CLOCK;
+            s->sw_running = FALSE;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return;
+        }
         if (s->sw_running) {
-            r = (RECT){cx - 80, by, cx - 5, by + bh};
+            RECT r = {cx - 80, by, cx - 5, by + bh};
             if (PtInRect(&r, (POINT){mx, my})) {
                 s->sw_accumulated_ms += GetTickCount() - s->sw_start_tick;
                 s->sw_running = FALSE; InvalidateRect(hwnd,NULL,FALSE); return;
@@ -355,7 +376,7 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
                 s->sw_running = FALSE; s->sw_accumulated_ms = 0; InvalidateRect(hwnd,NULL,FALSE); return;
             }
         } else {
-            r = (RECT){cx - 80, by, cx - 5, by + bh};
+            RECT r = {cx - 80, by, cx - 5, by + bh};
             if (PtInRect(&r, (POINT){mx, my})) {
                 s->sw_running = TRUE; s->sw_start_tick = GetTickCount(); InvalidateRect(hwnd,NULL,FALSE); return;
             }
