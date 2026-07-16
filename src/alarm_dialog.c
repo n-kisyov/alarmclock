@@ -61,6 +61,22 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case IDC_ALARM_HOUR:
+            if (HIWORD(wp) == EN_KILLFOCUS) {
+                TCHAR b[16];
+                GetDlgItemText(hDlg, IDC_ALARM_HOUR, b, 16);
+                int v = _wtoi(b);
+                if (v > 23) SetDlgItemText(hDlg, IDC_ALARM_HOUR, L"23");
+            }
+            break;
+        case IDC_ALARM_MINUTE:
+            if (HIWORD(wp) == EN_KILLFOCUS) {
+                TCHAR b[16];
+                GetDlgItemText(hDlg, IDC_ALARM_MINUTE, b, 16);
+                int v = _wtoi(b);
+                if (v > 59) SetDlgItemText(hDlg, IDC_ALARM_MINUTE, L"59");
+            }
+            break;
         case IDC_DAY_ALL:
             for (int i = 0; i < 7; i++)
                 CheckDlgButton(hDlg, dayIds[i], BST_CHECKED);

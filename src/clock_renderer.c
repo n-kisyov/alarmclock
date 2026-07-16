@@ -255,7 +255,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipSetTextRenderingHint(gr, TextRenderingHintAntiAlias);
 
     ARGB faceArgb  = 0xFFFAFAFF;
-    ARGB rimArgb   = 0xFFB4B4B9;
+    ARGB rimArgb   = s->dark_mode ? 0xFFB4B4B9 : 0xFFA0A0A8;
     ARGB tickArgb  = colorref_to_argb(s->textColor);
     ARGB accentArgb = colorref_to_argb(s->accentColor);
 

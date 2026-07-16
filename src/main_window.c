@@ -325,6 +325,8 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     r.left = cx - 58; r.right = cx + 10;
     if (s->cd_running)
         draw_highlighted_button(hdc, &r, L"Timer", RGB(0x20,0x80,0x20), RGB(255,255,255));
+    else if (s->cd_remaining_ms <= 0 && (s->cd_hours + s->cd_mins + s->cd_secs > 0))
+        draw_button(hdc, &r, L"Finished!", RGB(0xC0,0x30,0x30), RGB(255,255,255));
     else
         draw_button(hdc, &r, L"Timer", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
 
@@ -753,7 +755,7 @@ static void on_command(HWND hwnd, WPARAM wp) {
         }
         break;
     case IDM_ABOUT:
-        MessageBoxW(hwnd, L"AlarmClock\n\nNikolay Kisyov, 2026", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
+        MessageBoxW(hwnd, L"AlarmClock v1.1\n\nNikolay Kisyov, 2026", L"About AlarmClock", MB_OK|MB_ICONINFORMATION);
         break;
     case IDM_EXIT:
         sound_stop_alarm(s); DestroyWindow(hwnd); break;
@@ -826,6 +828,11 @@ static void on_size(HWND hwnd, WPARAM wp) {
     int availW = cr.right - cr.left - SEP_MARGIN*2 - 8;
     if (availW < 40) return;
 
+    static int lastW = 0, lastH = 0;
+    if (cr.right - cr.left == lastW && cr.bottom - cr.top == lastH) return;
+    lastW = cr.right - cr.left;
+    lastH = cr.bottom - cr.top;
+
     if (s->hClockFont) { DeleteObject(s->hClockFont); s->hClockFont = NULL; }
     if (s->hDateFont)  { DeleteObject(s->hDateFont);  s->hDateFont  = NULL; }
 
@@ -842,7 +849,8 @@ static void on_size(HWND hwnd, WPARAM wp) {
     s->hDateFont = CreateFontW(dateH,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
 
     hdc = GetDC(hwnd);
-    SelectObject(hdc, s->hClockFont); GetTextMetricsW(hdc, &tm);
+    hOld = (HFONT)SelectObject(hdc, s->hClockFont);
+    GetTextMetricsW(hdc, &tm);
     TEXTMETRICW tmDate;
     SelectObject(hdc, s->hDateFont); GetTextMetricsW(hdc, &tmDate);
     SelectObject(hdc, hOld); ReleaseDC(hwnd, hdc);

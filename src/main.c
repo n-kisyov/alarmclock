@@ -56,7 +56,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
     if (slash) *slash = 0;
 
-    settings_load(&g_state);
+    if (!settings_load(&g_state)) {
+        TCHAR path[MAX_PATH];
+        wsprintf(path, L"%s\\alarmclock_settings.json", g_state.exe_dir);
+        HANDLE hTest = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                                   OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hTest != INVALID_HANDLE_VALUE) {
+            DWORD fsz = GetFileSize(hTest, NULL);
+            CloseHandle(hTest);
+            if (fsz > 2) {
+                MessageBoxW(NULL, L"Settings file could not be read. Using defaults.",
+                            L"AlarmClock", MB_OK | MB_ICONWARNING);
+            }
+        }
+    }
 
     /* Initialize countdown display from saved config */
     if (g_state.cd_remaining_ms == 0)
