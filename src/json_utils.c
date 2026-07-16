@@ -31,8 +31,8 @@ static BOOL json_read_string(JsonReader *r, TCHAR *buf, int buf_sz) {
 }
 static BOOL json_read_bool(JsonReader *r, BOOL *val) {
     json_skip_ws(r);
-    if (r->p+4 <= r->end && wcsncmp(r->p, L"true", 4) == 0) { *val=TRUE; r->p+=4; return TRUE; }
-    if (r->p+5 <= r->end && wcsncmp(r->p, L"false", 5) == 0) { *val=FALSE; r->p+=5; return TRUE; }
+    if (r->p + 4 <= r->end && wcsncmp(r->p, L"true", 4) == 0) { *val=TRUE; r->p+=4; return TRUE; }
+    if (r->p + 5 <= r->end && wcsncmp(r->p, L"false", 5) == 0) { *val=FALSE; r->p+=5; return TRUE; }
     return FALSE;
 }
 static BOOL json_read_int(JsonReader *r, int *val) {
@@ -47,6 +47,7 @@ static BOOL json_read_int(JsonReader *r, int *val) {
 }
 
 BOOL json_load_settings(AppState *s, const TCHAR *path) {
+
     HANDLE hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) return FALSE;
     DWORD sz = GetFileSize(hFile, NULL);
@@ -133,6 +134,9 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
                 json_skip_ws(&r);
                 if (r.p < r.end && *r.p != L']') { if (!json_expect(&r, L',')) { free(buf); return FALSE; } }
             }
+            /* Consume the closing ] of the alarms array */
+            json_skip_ws(&r);
+            if (r.p < r.end && *r.p == L']') r.p++;
         }
         json_skip_ws(&r);
         if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return FALSE; } }
@@ -140,10 +144,10 @@ BOOL json_load_settings(AppState *s, const TCHAR *path) {
     free(buf);
     theme_update_colors(s);
 
-    /* Initialize countdown state from config */
     if (s->cd_remaining_ms == 0)
         s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
 
+    
     return TRUE;
 }
 
@@ -182,7 +186,8 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         s->always_on_top?L"true":L"false",
         s->clock_style==CLOCK_ANALOG?L"analog":L"digital",
         s->alarms_enabled?L"true":L"false", s->alarm_count,
-        s->alarms_collapsed?L"true":L"false", s->alarm_volume,
+        s->alarms_collapsed?L"true":L"false",
+        s->alarm_volume,
         s->snooze_minutes, s->app_mode, s->winX, s->winY, s->winW, s->winH,
         s->sound_mode==SOUND_MP3?L"mp3":L"simple",
         s->cd_hours, s->cd_mins, s->cd_secs);
