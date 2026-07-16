@@ -83,6 +83,7 @@ typedef struct {
 
     HANDLE   hSoundThread;
     HANDLE   hCrescendoThread;
+    HANDLE   hPreviewThread;
     BOOL     stop_sound;
     BOOL     sound_preview;
 

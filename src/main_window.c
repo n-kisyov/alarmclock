@@ -442,13 +442,11 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
         s->app_mode = APP_MODE_COUNTDOWN;
         if (s->cd_remaining_ms == 0)
             s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
-        s->sw_running = FALSE;
         InvalidateRect(hwnd,NULL,FALSE); return;
     }
     RECT wr = {cx + 18, by, cx + 85, by + bh};
     if (PtInRect(&wr, (POINT){mx, my})) {
         s->app_mode = APP_MODE_STOPWATCH;
-        s->cd_running = FALSE;
         InvalidateRect(hwnd,NULL,FALSE); return;
     }
 }
@@ -552,9 +550,11 @@ static void on_paint(HWND hwnd) {
     {
         DWORD now = GetTickCount();
         if (g_state.cd_running) {
-            int elapsed = (int)(now - g_state.cd_last_tick);
+            if (now >= g_state.cd_last_tick) {
+                int elapsed = (int)(now - g_state.cd_last_tick);
+                g_state.cd_remaining_ms -= elapsed;
+            }
             g_state.cd_last_tick = now;
-            g_state.cd_remaining_ms -= elapsed;
             if (g_state.cd_remaining_ms <= 0) {
                 g_state.cd_remaining_ms = 0;
                 g_state.cd_running = FALSE;
@@ -718,10 +718,13 @@ static LRESULT on_create(HWND hwnd) {
     s->hDateFont = CreateFontW(dateH,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
 
     hdc = GetDC(hwnd);
-    SelectObject(hdc, s->hClockFont); GetTextMetricsW(hdc, &tmClock);
+    hOld = (HFONT)SelectObject(hdc, s->hClockFont);
+    GetTextMetricsW(hdc, &tmClock);
     TEXTMETRICW tmDate;
-    SelectObject(hdc, s->hDateFont); GetTextMetricsW(hdc, &tmDate);
-    SelectObject(hdc, hOld); ReleaseDC(hwnd, hdc);
+    SelectObject(hdc, s->hDateFont);
+    GetTextMetricsW(hdc, &tmDate);
+    SelectObject(hdc, hOld);
+    ReleaseDC(hwnd, hdc);
 
     if (s->clock_style == CLOCK_ANALOG) {
         RECT cr; GetClientRect(hwnd, &cr);
@@ -852,7 +855,7 @@ static void on_size(HWND hwnd, WPARAM wp) {
         s->clockAreaH = tm.tmHeight + gap + tmDate.tmHeight + 6 + 34;
     }
 
-    InvalidateRect(hwnd, NULL, TRUE);
+    InvalidateRect(hwnd, NULL, FALSE);
 }
 
 static void on_destroy(HWND hwnd) {

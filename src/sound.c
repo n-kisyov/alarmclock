@@ -155,7 +155,7 @@ void sound_play_alarm(AppState *s) {
                 s->hCrescendoThread = CreateThread(NULL, 0, cresendo_thread, s, 0, NULL);
             }
             if (s->sound_preview) {
-                CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
+                s->hPreviewThread = CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
             }
             return;
         }
@@ -164,7 +164,7 @@ void sound_play_alarm(AppState *s) {
     s->stop_sound = FALSE;
     s->hSoundThread = CreateThread(NULL, 0, sound_simple_thread, s, 0, NULL);
     if (s->sound_preview) {
-        CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
+        s->hPreviewThread = CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
     }
 }
 
@@ -181,6 +181,11 @@ void sound_stop_alarm(AppState *s) {
         WaitForSingleObject(s->hCrescendoThread, 3000);
         CloseHandle(s->hCrescendoThread);
         s->hCrescendoThread = NULL;
+    }
+    if (s->hPreviewThread) {
+        WaitForSingleObject(s->hPreviewThread, 3000);
+        CloseHandle(s->hPreviewThread);
+        s->hPreviewThread = NULL;
     }
 
     mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);
