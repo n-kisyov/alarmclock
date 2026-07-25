@@ -301,7 +301,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipCreateFont(numFamily, (REAL)numH, FontStyleBold, UnitPixel, &numFont);
 
     GpSolidFill *numBrush = NULL;
-    ARGB numArgb = s->dark_mode ? 0xFFFFE0C0 : tickArgb;
+    ARGB numArgb = s->dark_mode ? 0xFFFFF0D8 : tickArgb;
     GdipCreateSolidFill(numArgb, &numBrush);
 
     GpStringFormat *fmt = NULL;
@@ -313,14 +313,14 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
         double a = i * M_PI / 6.0 - M_PI / 2.0;
         WCHAR num[4];
         wsprintfW(num, L"%d", i);
-        REAL rw = 42.0f;
-        REAL rh = (REAL)(numH + 4);
+        REAL rw = 56.0f;
+        REAL rh = (REAL)(numH + 6);
         RectF numRect = {
             cx + (REAL)((radius - 30) * cos(a)) - rw / 2.0f,
             cy + (REAL)((radius - 30) * sin(a)) - rh / 2.0f,
             rw, rh
         };
-        GdipDrawString(gr, num, -1, numFont, &numRect, fmt, (GpBrush*)numBrush);
+        GdipDrawString(gr, num, lstrlenW(num), numFont, &numRect, fmt, (GpBrush*)numBrush);
     }
 
     GdipDeleteStringFormat(fmt);
