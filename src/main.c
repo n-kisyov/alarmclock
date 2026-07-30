@@ -3,12 +3,17 @@
 #include "settings_data.h"
 #include "clock_renderer.h"
 #include <dwmapi.h>
+#include <strsafe.h>
 
 AppState g_state;
 
 void autostart_update(AppState *s) {
     TCHAR exePath[MAX_PATH];
+    TCHAR quotedExePath[MAX_PATH * 2];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
+    if (FAILED(StringCchPrintfW(quotedExePath, MAX_PATH * 2, L"\"%s\"", exePath))) {
+        return;
+    }
 
     HKEY hKey;
     if (s->autostart) {
@@ -16,7 +21,8 @@ void autostart_update(AppState *s) {
                 L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
                 0, NULL, 0, KEY_SET_VALUE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
             RegSetValueExW(hKey, L"AlarmClock", 0, REG_SZ,
-                           (BYTE *)exePath, (DWORD)((lstrlenW(exePath) + 1) * sizeof(WCHAR)));
+                           (const BYTE *)quotedExePath,
+                           (DWORD)((lstrlenW(quotedExePath) + 1) * sizeof(WCHAR)));
             RegCloseKey(hKey);
         }
     } else {
@@ -58,7 +64,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     settings_load(&g_state);
 
-    /* Initialize countdown display from saved config */
     if (g_state.cd_remaining_ms == 0)
         g_state.cd_remaining_ms = (g_state.cd_hours*3600 + g_state.cd_mins*60 + g_state.cd_secs)*1000;
 

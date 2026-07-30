@@ -17,13 +17,20 @@ static void shuffle_mp3s(void) {
     g_mp3_index = 0;
 }
 
-static BOOL find_mp3_files(AppState *s) {
+static void free_mp3_paths(void) {
     if (g_mp3_paths) {
-        for (int i = 0; i < g_mp3_count; i++) free(g_mp3_paths[i]);
+        for (int i = 0; i < g_mp3_count; i++) {
+            free(g_mp3_paths[i]);
+        }
         free(g_mp3_paths);
         g_mp3_paths = NULL;
     }
     g_mp3_count = 0;
+    g_mp3_index = 0;
+}
+
+static BOOL find_mp3_files(AppState *s) {
+    free_mp3_paths();
 
     TCHAR search[MAX_PATH];
     wsprintf(search, L"%s\\songs\\*.mp3", s->exe_dir);
@@ -45,9 +52,19 @@ static BOOL find_mp3_files(AppState *s) {
 
     int idx = 0;
     hFind = FindFirstFileW(search, &fd);
+    if (hFind == INVALID_HANDLE_VALUE) {
+        free_mp3_paths();
+        return FALSE;
+    }
+
     do {
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
             g_mp3_paths[idx] = (TCHAR *)malloc(MAX_PATH * sizeof(TCHAR));
+            if (!g_mp3_paths[idx]) {
+                FindClose(hFind);
+                free_mp3_paths();
+                return FALSE;
+            }
             wsprintf(g_mp3_paths[idx], L"%s\\songs\\%s", s->exe_dir, fd.cFileName);
             idx++;
         }
@@ -102,10 +119,15 @@ static DWORD WINAPI cresendo_thread(LPVOID param) {
 
 static DWORD WINAPI sound_preview_thread(LPVOID param) {
     AppState *s = (AppState *)param;
-    Sleep(3000);
-    if (s->sound_preview) {
-        s->sound_preview = FALSE;
-        sound_stop_alarm(s);
+    for (int step = 0; step < 60; step++) {
+        if (s->stop_sound) {
+            return 0;
+        }
+        Sleep(50);
+    }
+
+    if (s->sound_preview && !s->stop_sound && s->hMainWnd) {
+        PostMessageW(s->hMainWnd, WM_SOUND_PREVIEW_DONE, 0, 0);
     }
     return 0;
 }
@@ -122,7 +144,6 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
             if (s->stop_sound) break;
             Sleep(300);
         }
-        s->sound_preview = FALSE;
         s->stop_sound = FALSE;
         return 0;
     }
@@ -144,6 +165,19 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
     }
     s->stop_sound = FALSE;
     return 0;
+}
+
+static void wait_and_close_thread(HANDLE *thread_handle) {
+    if (!thread_handle || !*thread_handle) {
+        return;
+    }
+
+    DWORD thread_id = GetThreadId(*thread_handle);
+    if (thread_id != 0 && thread_id != GetCurrentThreadId()) {
+        WaitForSingleObject(*thread_handle, 3000);
+    }
+    CloseHandle(*thread_handle);
+    *thread_handle = NULL;
 }
 
 void sound_play_alarm(AppState *s) {
@@ -171,31 +205,14 @@ void sound_play_alarm(AppState *s) {
 void sound_stop_alarm(AppState *s) {
 
     s->stop_sound = TRUE;
+    s->sound_preview = FALSE;
 
-    if (s->hSoundThread) {
-        WaitForSingleObject(s->hSoundThread, 3000);
-        CloseHandle(s->hSoundThread);
-        s->hSoundThread = NULL;
-    }
-    if (s->hCrescendoThread) {
-        WaitForSingleObject(s->hCrescendoThread, 3000);
-        CloseHandle(s->hCrescendoThread);
-        s->hCrescendoThread = NULL;
-    }
-    if (s->hPreviewThread) {
-        WaitForSingleObject(s->hPreviewThread, 3000);
-        CloseHandle(s->hPreviewThread);
-        s->hPreviewThread = NULL;
-    }
+    wait_and_close_thread(&s->hSoundThread);
+    wait_and_close_thread(&s->hCrescendoThread);
+    wait_and_close_thread(&s->hPreviewThread);
 
     mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);
-
-    if (g_mp3_paths) {
-        for (int i = 0; i < g_mp3_count; i++) free(g_mp3_paths[i]);
-        free(g_mp3_paths);
-        g_mp3_paths = NULL;
-    }
-    g_mp3_count = 0;
+    free_mp3_paths();
 }
 
 void sound_on_mci_notify(AppState *s) {

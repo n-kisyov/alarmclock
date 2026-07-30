@@ -239,7 +239,8 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
     }
 
     if (s->snooze_pending) {
-        DWORD remainMs = (s->snooze_end_ms > GetTickCount()) ? (s->snooze_end_ms - GetTickCount()) : 0;
+        ULONGLONG nowMs = GetTickCount64();
+        ULONGLONG remainMs = (s->snooze_end_ms > nowMs) ? (s->snooze_end_ms - nowMs) : 0;
         int rs = (int)(remainMs / 1000);
         WCHAR buf[32];
         wsprintfW(buf, L"Snoozed  %d:%02d", rs / 60, rs % 60);
@@ -397,7 +398,7 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
             if (s->cd_remaining_ms > 0) {
                 RECT startR = {cx - total/2, by, cx - total/2 + bw, by + bh};
                 if (PtInRect(&startR, (POINT){mx, my})) {
-                    s->cd_running = TRUE; s->cd_last_tick = GetTickCount();
+                    s->cd_running = TRUE; s->cd_last_tick = GetTickCount64();
                     InvalidateRect(hwnd,NULL,FALSE); return;
                 }
             }
@@ -458,7 +459,7 @@ static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
 static void snooze_alarm(void) {
     AppState *s = &g_state;
     s->snooze_total_sec = s->snooze_minutes * 60;
-    s->snooze_end_ms = GetTickCount() + (DWORD)s->snooze_total_sec * 1000;
+    s->snooze_end_ms = GetTickCount64() + (ULONGLONG)s->snooze_total_sec * 1000ULL;
     s->snooze_pending = TRUE;
     s->alarm_active = FALSE;
     sound_stop_alarm(s);
@@ -550,12 +551,10 @@ static void on_paint(HWND hwnd) {
 
     /* Always tick running countdown regardless of mode */
     {
-        DWORD now = GetTickCount();
+        ULONGLONG now = GetTickCount64();
         if (g_state.cd_running) {
-            if (now >= g_state.cd_last_tick) {
-                int elapsed = (int)(now - g_state.cd_last_tick);
-                g_state.cd_remaining_ms -= elapsed;
-            }
+            int elapsed = (int)(now - g_state.cd_last_tick);
+            g_state.cd_remaining_ms -= elapsed;
             g_state.cd_last_tick = now;
             if (g_state.cd_remaining_ms <= 0) {
                 g_state.cd_remaining_ms = 0;
@@ -650,6 +649,7 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
         if (PtInRect(&chkR, (POINT){mx, my})) {
             if (g_state.alarms[i].hour != ALARM_UNSET) {
                 g_state.alarms[i].enabled = !g_state.alarms[i].enabled;
+                settings_save(&g_state);
                 InvalidateRect(hwnd, NULL, FALSE);
             }
             return;
@@ -804,7 +804,7 @@ static void on_timer(HWND hwnd) {
             }
         }
 
-        if (s->snooze_pending && GetTickCount() >= s->snooze_end_ms) {
+        if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
             s->snooze_pending = FALSE;
             s->alarm_active = TRUE;
             s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
@@ -906,6 +906,11 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         AnimateWindow(hwnd, 200, AW_HIDE | AW_BLEND);
         ShowWindow(hwnd, SW_HIDE); return 0;
     case WM_DESTROY: on_destroy(hwnd); return 0;
+    case WM_SOUND_PREVIEW_DONE:
+        if (g_state.sound_preview || g_state.hPreviewThread) {
+            sound_stop_alarm(&g_state);
+        }
+        return 0;
     case WM_TRAYICON:
         if (LOWORD(lp) == WM_RBUTTONUP) tray_show_menu(hwnd, &g_state);
         else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {

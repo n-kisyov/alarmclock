@@ -48,14 +48,14 @@ typedef struct {
     int      last_fire_min;
 
     BOOL     snooze_pending;
-    DWORD    snooze_end_ms;
+    ULONGLONG snooze_end_ms;
     int      snooze_total_sec;
 
     /* Countdown state */
     int      cd_hours, cd_mins, cd_secs;
     int      cd_remaining_ms;
     BOOL     cd_running;
-    DWORD    cd_last_tick;
+    ULONGLONG cd_last_tick;
     BOOL     alarms_collapsed;
 
     /* Stopwatch state */

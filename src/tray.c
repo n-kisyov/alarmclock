@@ -1,5 +1,39 @@
 #include "tray.h"
 #include "main.h"
+#include <limits.h>
+
+static BOOL compute_next_alarm_delta_minutes(const SYSTEMTIME *st,
+                                             const Alarm *alarm, int *delta_minutes) {
+    if (!alarm->enabled || alarm->hour == ALARM_UNSET || alarm->minute == ALARM_UNSET) {
+        return FALSE;
+    }
+
+    int now_min = (int)st->wHour * 60 + (int)st->wMinute;
+    int alarm_min = alarm->hour * 60 + alarm->minute;
+
+    if (alarm->repeat_days == 0) {
+        if (alarm_min <= now_min) {
+            return FALSE;
+        }
+        *delta_minutes = alarm_min - now_min;
+        return TRUE;
+    }
+
+    for (int day_offset = 0; day_offset < 7; day_offset++) {
+        int day = (st->wDayOfWeek + day_offset) % 7;
+        if (!(alarm->repeat_days & (1 << day))) {
+            continue;
+        }
+        if (day_offset == 0 && alarm_min <= now_min) {
+            continue;
+        }
+
+        *delta_minutes = day_offset * 24 * 60 + (alarm_min - now_min);
+        return TRUE;
+    }
+
+    return FALSE;
+}
 
 void tray_create(HWND hwnd, AppState *s) {
 
@@ -41,38 +75,29 @@ void tray_show_menu(HWND hwnd, AppState *s) {
 void tray_update_tooltip(AppState *s) {
     if (!s->tray_added) return;
 
-    int bestHour = ALARM_UNSET;
-    int bestMin  = ALARM_UNSET;
-
     SYSTEMTIME st;
     GetLocalTime(&st);
-    int nowMin = st.wHour * 60 + st.wMinute;
-    int today = st.wDayOfWeek;
+
+    int best_delta = INT_MAX;
+    int best_hour = ALARM_UNSET;
+    int best_min = ALARM_UNSET;
 
     for (int i = 0; i < s->alarm_count; i++) {
-        if (!s->alarms[i].enabled || s->alarms[i].hour == ALARM_UNSET) continue;
-
-        int alarmMin = s->alarms[i].hour * 60 + s->alarms[i].minute;
-
-        if (s->alarms[i].repeat_days == 0) {
-            if (alarmMin <= nowMin) continue;
-        }
-        if (s->alarms[i].repeat_days != 0x7F) {
-            int rd = s->alarms[i].repeat_days;
-            if (rd == 0x3E && (today == 0 || today == 6)) continue;
-            if (rd == 0x41 && (today >= 1 && today <= 5)) continue;
-            if (!(rd & (1 << today))) continue;
+        int delta_minutes;
+        if (!compute_next_alarm_delta_minutes(&st, &s->alarms[i], &delta_minutes)) {
+            continue;
         }
 
-        if (bestHour == ALARM_UNSET || alarmMin < bestHour * 60 + bestMin) {
-            bestHour = s->alarms[i].hour;
-            bestMin  = s->alarms[i].minute;
+        if (delta_minutes < best_delta) {
+            best_delta = delta_minutes;
+            best_hour = s->alarms[i].hour;
+            best_min = s->alarms[i].minute;
         }
     }
 
     WCHAR tip[128];
-    if (bestHour >= 0) {
-        wsprintfW(tip, L"Next alarm: %02d:%02d", bestHour, bestMin);
+    if (best_hour >= 0) {
+        wsprintfW(tip, L"Next alarm: %02d:%02d", best_hour, best_min);
     } else {
         lstrcpyW(tip, L"AlarmClock");
     }
