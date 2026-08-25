@@ -28,6 +28,20 @@ static void calc_clock_rect(HWND hwnd, RECT *rc) {
     rc->bottom = rc->top + h;
 }
 
+/* The analog clock area is derived from window width, which on a wide or short
+   window used to exceed the client height and push the mode bar and the whole
+   alarm panel off-screen, out of reach. Keep enough room for a collapsed panel. */
+static int clamp_clock_area(HWND hwnd, int desired) {
+    RECT cr;
+    GetClientRect(hwnd, &cr);
+    int panelMin = 4 + ALARM_HEADER_H + 17 + ALARM_PAD_Y;
+    int maxH = (cr.bottom - cr.top) - panelMin;
+    if (maxH < 80) maxH = 80;
+    if (desired > maxH) desired = maxH;
+    if (desired < 80) desired = 80;
+    return desired;
+}
+
 static HFONT create_fitted_clock_font(HWND hwnd, const WCHAR *faceName) {
     RECT cr;
     GetClientRect(hwnd, &cr);
@@ -75,6 +89,16 @@ static void calc_alarm_rects(HWND hwnd, RECT *panel, RECT *header, RECT *srcCloc
     panel->right = panX + panW; panel->bottom = panY + panH;
     header->left = panX + 12; header->top = panY + 6;
     header->right = panX + panW - 12; header->bottom = header->top + ALARM_HEADER_H;
+}
+
+/* How many rows actually fit inside the panel. On a short window the panel
+   shrinks to its header, and rows drawn past its bottom edge spilled onto the
+   background. */
+static int alarm_visible_rows(const RECT *panel, const RECT *header) {
+    int avail = panel->bottom - (header->bottom + 2);
+    int n = (avail > 0) ? avail / ALARM_ROW_H : 0;
+    if (n > g_state.alarm_count) n = g_state.alarm_count;
+    return n;
 }
 
 static RECT get_alarm_row_rect(const RECT *panel, const RECT *header, int idx) {
@@ -164,7 +188,8 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         return;
     }
 
-    for (int i = 0; i < s->alarm_count; i++) {
+    int visible = alarm_visible_rows(&panel, &header);
+    for (int i = 0; i < visible; i++) {
         RECT rowR  = get_alarm_row_rect(&panel, &header, i);
         RECT chkR  = get_check_rect(&rowR);
         RECT editR = get_edit_rect(&rowR);
@@ -222,237 +247,242 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
 
 /* ---------- mode action bar ---------- */
 
-static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
-    AppState *s = &g_state;
-    int cx = clockRect->left + (clockRect->right - clockRect->left) / 2;
-    int by = clockRect->bottom - 30;
-    int bh = 26;
-
-    if (s->alarm_active) {
-        RECT r;
-        r.top = by; r.bottom = by + bh;
-        r.left = cx - 108; r.right = cx - 6;
-        draw_button(hdc, &r, L"SNOOZE", RGB(0xDE, 0x87, 0x00), RGB(255,255,255));
-        r.left = cx + 6; r.right = cx + 108;
-        draw_button(hdc, &r, L"DISMISS", RGB(0xE8, 0x11, 0x23), RGB(255,255,255));
-        return;
-    }
-
-    if (s->snooze_pending) {
-        ULONGLONG nowMs = GetTickCount64();
-        ULONGLONG remainMs = (s->snooze_end_ms > nowMs) ? (s->snooze_end_ms - nowMs) : 0;
-        int rs = (int)(remainMs / 1000);
-        WCHAR buf[32];
-        wsprintfW(buf, L"Snoozed  %d:%02d", rs / 60, rs % 60);
-        SetBkMode(hdc, TRANSPARENT); SetTextColor(hdc, s->textColor);
-        HFONT hOld = (HFONT)SelectObject(hdc, s->hGuiFont);
-        RECT tr; tr.left = cx - 100; tr.top = by; tr.right = cx + 100; tr.bottom = by + 14;
-        DrawTextW(hdc, buf, -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        SelectObject(hdc, hOld);
-        RECT btn; btn.left = cx - 52; btn.top = by; btn.right = cx + 52; btn.bottom = by + bh;
-        draw_button(hdc, &btn, L"CANCEL", RGB(0xE8, 0x11, 0x23), RGB(255,255,255));
-        return;
-    }
-
-    if (s->app_mode == APP_MODE_COUNTDOWN) {
-        /* Clock return button on the far left */
-        RECT cb;
-        cb.top = by; cb.bottom = by + bh;
-        cb.left = cx - 135; cb.right = cx - 100;
-        COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
-        draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
-
-        COLORREF resetBg = RGB(0xC0, 0x50, 0x50);
-
-        if (s->cd_running) {
-            RECT r; r.top = by; r.bottom = by + bh;
-            r.left = cx - 80; r.right = cx - 5;
-            draw_button(hdc, &r, L"Pause", s->accentColor, RGB(255,255,255));
-            r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
-        } else {
-            int bw = 56, gap = 6;
-            int total = 3 * bw + 2 * gap;
-            int bx = cx - total / 2;
-            RECT r; r.top = by; r.bottom = by + bh;
-
-            if (s->cd_remaining_ms > 0) {
-                r.left = bx; r.right = bx + bw;
-                draw_button(hdc, &r, L"Start", RGB(0x00,0x88,0x00), RGB(255,255,255));
-                bx += bw + gap;
-            }
-            r.left = bx; r.right = bx + bw;
-            draw_button(hdc, &r, L"Set", s->accentColor, RGB(255,255,255));
-            bx += bw + gap;
-            r.left = bx; r.right = bx + bw;
-            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
-        }
-        return;
-    }
-
-    if (s->app_mode == APP_MODE_STOPWATCH) {
-        RECT cb;
-        cb.top = by; cb.bottom = by + bh;
-        cb.left = cx - 135; cb.right = cx - 100;
-        COLORREF cbBg = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
-        draw_button(hdc, &cb, L"Clock", cbBg, s->textColor);
-
-        COLORREF resetBg = RGB(0xC0, 0x50, 0x50);
-
-        if (s->sw_running) {
-            RECT r; r.top = by; r.bottom = by + bh;
-            r.left = cx - 80; r.right = cx - 5;
-            draw_button(hdc, &r, L"Stop", RGB(0xCC,0x33,0x00), RGB(255,255,255));
-            r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
-        } else {
-            RECT r; r.top = by; r.bottom = by + bh;
-            r.left = cx - 80; r.right = cx - 5;
-            draw_button(hdc, &r, L"Start", RGB(0x00,0x88,0x00), RGB(255,255,255));
-            r.left = cx + 5; r.right = cx + 80;
-            draw_button(hdc, &r, L"Reset", resetBg, RGB(255,255,255));
-        }
-        return;
-    }
-
-    /* Clock mode — mode toggle buttons */
-    RECT r; r.top = by; r.bottom = by + bh;
-    r.left = cx - 135; r.right = cx - 65;
-    if (s->app_mode == APP_MODE_CLOCK)
-        draw_highlighted_button(hdc, &r, L"Clock", s->accentColor, RGB(255,255,255));
-    else
-        draw_button(hdc, &r, L"Clock", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
-
-    r.left = cx - 58; r.right = cx + 10;
-    if (s->cd_running)
-        draw_highlighted_button(hdc, &r, L"Timer", RGB(0x20,0x80,0x20), RGB(255,255,255));
-    else if (s->cd_remaining_ms <= 0 && (s->cd_hours + s->cd_mins + s->cd_secs > 0))
-        draw_button(hdc, &r, L"Finished!", RGB(0xC0,0x30,0x30), RGB(255,255,255));
-    else
-        draw_button(hdc, &r, L"Timer", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
-
-    r.left = cx + 18; r.right = cx + 85;
-    if (s->sw_running)
-        draw_highlighted_button(hdc, &r, L"Stopw.", RGB(0x20,0x80,0x20), RGB(255,255,255));
-    else
-        draw_button(hdc, &r, L"Stopw.", s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
-}
-
 /* ---------- snooze / dismiss (forward) ---------- */
 static void snooze_alarm(void);
 static void dismiss_alarm(void);
 static void show_and_focus(HWND hwnd);
 
-/* ---------- mode bar hit testing ---------- */
+/* ---------- mode action bar ----------
 
-static void on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
-    AppState *s = &g_state;
-    int cx = clockRect->left + (clockRect->right - clockRect->left) / 2;
-    int by = clockRect->bottom - 30;
-    int bh = 26;
+   The painter and the hit-tester used to recompute these rectangles from the
+   same constants independently, and had already drifted apart: the Reset button
+   shown while the countdown was stopped got drawn but never hit-tested, so it
+   did nothing. Both now build one table and read positions out of it. */
+
+typedef enum {
+    MB_NONE = 0,
+    MB_SNOOZE, MB_DISMISS,
+    MB_TO_CLOCK, MB_TO_TIMER, MB_TO_STOPWATCH,
+    MB_CD_START, MB_CD_PAUSE, MB_CD_SET, MB_CD_RESET,
+    MB_SW_START, MB_SW_STOP, MB_SW_RESET
+} ModeButtonId;
+
+#define MODE_BAR_H        26
+#define MODE_BAR_GAP      8
+#define MODE_BAR_BOTTOM   4
+#define MODE_BAR_MAX      5
+
+typedef struct {
+    ModeButtonId id;
+    int          width;
+    RECT         rect;
+    const WCHAR *text;
+    COLORREF     bg, fg;
+    BOOL         highlight;
+    BOOL         isLabel;   /* plain text, never hit-tested */
+} ModeItem;
+
+typedef struct {
+    ModeItem items[MODE_BAR_MAX];
+    int      count;
+    WCHAR    labelBuf[32];
+} ModeBar;
+
+static ModeItem *mb_next(ModeBar *bar) {
+    if (bar->count >= MODE_BAR_MAX) return NULL;
+    ModeItem *it = &bar->items[bar->count++];
+    ZeroMemory(it, sizeof(*it));
+    return it;
+}
+
+static void mb_add(ModeBar *bar, ModeButtonId id, const WCHAR *text, int width,
+                   COLORREF bg, COLORREF fg, BOOL highlight) {
+    ModeItem *it = mb_next(bar);
+    if (!it) return;
+    it->id = id; it->text = text; it->width = width;
+    it->bg = bg; it->fg = fg; it->highlight = highlight;
+}
+
+static void mb_add_label(ModeBar *bar, const WCHAR *text, int width, COLORREF fg) {
+    ModeItem *it = mb_next(bar);
+    if (!it) return;
+    lstrcpynW(bar->labelBuf, text, 32);
+    it->id = MB_NONE; it->text = bar->labelBuf; it->width = width;
+    it->fg = fg; it->isLabel = TRUE;
+}
+
+/* Centres the row on the clock area. Because the width is summed from the items
+   actually present, dropping a button - Start, when the timer is already at
+   zero - no longer leaves the rest sitting off-centre. */
+static void mb_layout(ModeBar *bar, const RECT *clockRect) {
+    int total = 0;
+    for (int i = 0; i < bar->count; i++) {
+        total += bar->items[i].width;
+        if (i) total += MODE_BAR_GAP;
+    }
+    int cx  = clockRect->left + (clockRect->right - clockRect->left) / 2;
+    int top = clockRect->bottom - MODE_BAR_H - MODE_BAR_BOTTOM;
+    int x   = cx - total / 2;
+
+    for (int i = 0; i < bar->count; i++) {
+        ModeItem *it = &bar->items[i];
+        it->rect.left   = x;
+        it->rect.right  = x + it->width;
+        it->rect.top    = top;
+        it->rect.bottom = top + MODE_BAR_H;
+        x += it->width + MODE_BAR_GAP;
+    }
+}
+
+static void build_mode_bar(const AppState *s, const RECT *clockRect, ModeBar *bar) {
+    const COLORREF white   = RGB(255, 255, 255);
+    const COLORREF neutral = s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0);
+    const COLORREF resetBg = RGB(0xC0, 0x50, 0x50);
+
+    bar->count = 0;
 
     if (s->alarm_active) {
-        RECT sr = {cx - 108, by, cx - 6, by + bh};
-        RECT dr = {cx + 6, by, cx + 108, by + bh};
-        if (PtInRect(&sr, (POINT){mx, my})) { snooze_alarm(); return; }
-        if (PtInRect(&dr, (POINT){mx, my})) { dismiss_alarm(); return; }
-        return;
-    }
-    if (s->snooze_pending) {
-        RECT cr = {cx - 52, by, cx + 52, by + bh};
-        if (PtInRect(&cr, (POINT){mx, my})) { dismiss_alarm(); return; }
-        return;
-    }
-
-    if (s->app_mode == APP_MODE_COUNTDOWN) {
-        RECT cb = {cx - 135, by, cx - 100, by + bh};
-        if (PtInRect(&cb, (POINT){mx, my})) {
-            s->app_mode = APP_MODE_CLOCK;
-            InvalidateRect(hwnd, NULL, FALSE);
-            return;
-        }
+        mb_add(bar, MB_SNOOZE,  L"SNOOZE",  102, RGB(0xDE,0x87,0x00), white, FALSE);
+        mb_add(bar, MB_DISMISS, L"DISMISS", 102, RGB(0xE8,0x11,0x23), white, FALSE);
+    } else if (s->snooze_pending) {
+        ULONGLONG now    = GetTickCount64();
+        ULONGLONG remain = (s->snooze_end_ms > now) ? (s->snooze_end_ms - now) : 0;
+        int rs = (int)(remain / 1000);
+        WCHAR buf[32];
+        wsprintfW(buf, L"Snoozed  %d:%02d", rs / 60, rs % 60);
+        /* Beside the button, not on top of it - the old label rect started at
+           the same y as CANCEL and overlapped it for the text's full height. */
+        mb_add_label(bar, buf, 96, s->textColor);
+        mb_add(bar, MB_DISMISS, L"CANCEL", 104, RGB(0xE8,0x11,0x23), white, FALSE);
+    } else if (s->app_mode == APP_MODE_COUNTDOWN) {
+        mb_add(bar, MB_TO_CLOCK, L"Clock", 56, neutral, s->textColor, FALSE);
         if (s->cd_running) {
-            RECT r = {cx - 80, by, cx - 5, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) { s->cd_running = FALSE; InvalidateRect(hwnd,NULL,FALSE); return; }
-            r = (RECT){cx + 5, by, cx + 80, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                s->cd_running = FALSE;
-                s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
-                InvalidateRect(hwnd,NULL,FALSE); return;
-            }
+            mb_add(bar, MB_CD_PAUSE, L"Pause", 62, s->accentColor, white, FALSE);
         } else {
-            int bw = 56, gap = 6;
-            int total = 3 * bw + 2 * gap;
-            int bx = cx - total / 2;
-
-            RECT setR = {bx, by, bx + bw, by + bh};
-            if (s->cd_remaining_ms > 0) {
-                bx += bw + gap;
-                setR = (RECT){bx, by, bx + bw, by + bh};
-            }
-            if (PtInRect(&setR, (POINT){mx, my})) {
-                DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_COUNTDOWN_SET),
-                                hwnd, cd_set_dlg_proc, (LPARAM)s);
-                InvalidateRect(hwnd,NULL,FALSE);
-                return;
-            }
-            if (s->cd_remaining_ms > 0) {
-                RECT startR = {cx - total/2, by, cx - total/2 + bw, by + bh};
-                if (PtInRect(&startR, (POINT){mx, my})) {
-                    s->cd_running = TRUE; s->cd_last_tick = GetTickCount64();
-                    InvalidateRect(hwnd,NULL,FALSE); return;
-                }
-            }
+            if (s->cd_remaining_ms > 0)
+                mb_add(bar, MB_CD_START, L"Start", 62, RGB(0x00,0x88,0x00), white, FALSE);
+            mb_add(bar, MB_CD_SET, L"Set", 62, s->accentColor, white, FALSE);
         }
-        return;
+        mb_add(bar, MB_CD_RESET, L"Reset", 62, resetBg, white, FALSE);
+    } else if (s->app_mode == APP_MODE_STOPWATCH) {
+        mb_add(bar, MB_TO_CLOCK, L"Clock", 56, neutral, s->textColor, FALSE);
+        if (s->sw_running)
+            mb_add(bar, MB_SW_STOP,  L"Stop",  62, RGB(0xCC,0x33,0x00), white, FALSE);
+        else
+            mb_add(bar, MB_SW_START, L"Start", 62, RGB(0x00,0x88,0x00), white, FALSE);
+        mb_add(bar, MB_SW_RESET, L"Reset", 62, resetBg, white, FALSE);
+    } else {
+        mb_add(bar, MB_TO_CLOCK, L"Clock", 70, s->accentColor, white, TRUE);
+
+        BOOL cdFinished = (s->cd_remaining_ms <= 0) &&
+                          (s->cd_hours + s->cd_mins + s->cd_secs > 0);
+        if (s->cd_running)
+            mb_add(bar, MB_TO_TIMER, L"Timer", 68, RGB(0x20,0x80,0x20), white, TRUE);
+        else if (cdFinished)
+            mb_add(bar, MB_TO_TIMER, L"Finished!", 68, RGB(0xC0,0x30,0x30), white, FALSE);
+        else
+            mb_add(bar, MB_TO_TIMER, L"Timer", 68, neutral, s->textColor, FALSE);
+
+        if (s->sw_running)
+            mb_add(bar, MB_TO_STOPWATCH, L"Stopw.", 67, RGB(0x20,0x80,0x20), white, TRUE);
+        else
+            mb_add(bar, MB_TO_STOPWATCH, L"Stopw.", 67, neutral, s->textColor, FALSE);
     }
 
-    if (s->app_mode == APP_MODE_STOPWATCH) {
-        RECT cb = {cx - 135, by, cx - 100, by + bh};
-        if (PtInRect(&cb, (POINT){mx, my})) {
-            s->app_mode = APP_MODE_CLOCK;
-            InvalidateRect(hwnd, NULL, FALSE);
-            return;
-        }
-        if (s->sw_running) {
-            RECT r = {cx - 80, by, cx - 5, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                s->sw_accumulated_ms += GetTickCount() - s->sw_start_tick;
-                s->sw_running = FALSE; InvalidateRect(hwnd,NULL,FALSE); return;
-            }
-            r = (RECT){cx + 5, by, cx + 80, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                s->sw_running = FALSE; s->sw_accumulated_ms = 0; InvalidateRect(hwnd,NULL,FALSE); return;
-            }
+    mb_layout(bar, clockRect);
+}
+
+static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
+    ModeBar bar;
+    build_mode_bar(&g_state, clockRect, &bar);
+
+    for (int i = 0; i < bar.count; i++) {
+        const ModeItem *it = &bar.items[i];
+        if (it->isLabel) {
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, it->fg);
+            HFONT hOld = (HFONT)SelectObject(hdc, g_state.hGuiFont);
+            DrawTextW(hdc, it->text, -1, (RECT *)&it->rect,
+                      DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, hOld);
+        } else if (it->highlight) {
+            draw_highlighted_button(hdc, &it->rect, it->text, it->bg, it->fg);
         } else {
-            RECT r = {cx - 80, by, cx - 5, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                s->sw_running = TRUE; s->sw_start_tick = GetTickCount(); InvalidateRect(hwnd,NULL,FALSE); return;
-            }
-            r = (RECT){cx + 5, by, cx + 80, by + bh};
-            if (PtInRect(&r, (POINT){mx, my})) {
-                s->sw_accumulated_ms = 0; InvalidateRect(hwnd,NULL,FALSE); return;
-            }
+            draw_button(hdc, &it->rect, it->text, it->bg, it->fg);
         }
-        return;
     }
+}
 
-    /* Clock mode — mode toggle buttons */
-    RECT cr = {cx - 135, by, cx - 65, by + bh};
-    if (PtInRect(&cr, (POINT){mx, my})) return; /* already clock */
+/* ---------- mode bar hit testing ---------- */
 
-    RECT tr = {cx - 58, by, cx + 10, by + bh};
-    if (PtInRect(&tr, (POINT){mx, my})) {
+/* TRUE if the click landed on a button, so the caller stops looking. */
+static BOOL on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
+    AppState *s = &g_state;
+    ModeBar bar;
+    build_mode_bar(s, clockRect, &bar);
+
+    POINT pt = { mx, my };
+    ModeButtonId hit = MB_NONE;
+    for (int i = 0; i < bar.count; i++) {
+        if (!bar.items[i].isLabel && PtInRect(&bar.items[i].rect, pt)) {
+            hit = bar.items[i].id;
+            break;
+        }
+    }
+    if (hit == MB_NONE) return FALSE;
+
+    switch (hit) {
+    case MB_SNOOZE:  snooze_alarm();  return TRUE;
+    case MB_DISMISS: dismiss_alarm(); return TRUE;
+
+    case MB_TO_CLOCK:
+        s->app_mode = APP_MODE_CLOCK;
+        break;
+    case MB_TO_TIMER:
         s->app_mode = APP_MODE_COUNTDOWN;
         if (s->cd_remaining_ms == 0)
             s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
-        InvalidateRect(hwnd,NULL,FALSE); return;
-    }
-    RECT wr = {cx + 18, by, cx + 85, by + bh};
-    if (PtInRect(&wr, (POINT){mx, my})) {
+        break;
+    case MB_TO_STOPWATCH:
         s->app_mode = APP_MODE_STOPWATCH;
-        InvalidateRect(hwnd,NULL,FALSE); return;
+        break;
+
+    case MB_CD_START:
+        s->cd_running   = TRUE;
+        s->cd_last_tick = GetTickCount64();
+        break;
+    case MB_CD_PAUSE:
+        s->cd_running = FALSE;
+        break;
+    case MB_CD_SET:
+        DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_COUNTDOWN_SET),
+                        hwnd, cd_set_dlg_proc, (LPARAM)s);
+        break;
+    case MB_CD_RESET:
+        s->cd_running      = FALSE;
+        s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
+        break;
+
+    case MB_SW_START:
+        s->sw_running    = TRUE;
+        s->sw_start_tick = GetTickCount();
+        break;
+    case MB_SW_STOP:
+        s->sw_accumulated_ms += GetTickCount() - s->sw_start_tick;
+        s->sw_running = FALSE;
+        break;
+    case MB_SW_RESET:
+        s->sw_running        = FALSE;
+        s->sw_accumulated_ms = 0;
+        break;
+
+    case MB_NONE:
+    default:
+        return FALSE;
     }
+
+    InvalidateRect(hwnd, NULL, FALSE);
+    return TRUE;
 }
 
 /* ---------- snooze / dismiss ---------- */
@@ -591,7 +621,7 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
     int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
     RECT clockRect; calc_clock_rect(hwnd, &clockRect);
 
-    on_mode_click(hwnd, mx, my, &clockRect);
+    if (on_mode_click(hwnd, mx, my, &clockRect)) return;
 
     RECT panel, header;
     calc_alarm_rects(hwnd, &panel, &header, &clockRect);
@@ -623,7 +653,8 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
         return;
     }
 
-    for (int i = 0; i < g_state.alarm_count; i++) {
+    int visibleRows = alarm_visible_rows(&panel, &header);
+    for (int i = 0; i < visibleRows; i++) {
         RECT rowR = get_alarm_row_rect(&panel, &header, i);
         RECT chkR = get_check_rect(&rowR);
         RECT editR = get_edit_rect(&rowR);
@@ -714,10 +745,11 @@ static LRESULT on_create(HWND hwnd) {
     if (s->clock_style == CLOCK_ANALOG) {
         RECT cr; GetClientRect(hwnd, &cr);
         int box = (cr.right - cr.left) - SEP_MARGIN*2;
-        s->clockAreaH = box + 10;
+        s->clockAreaH = clamp_clock_area(hwnd, box + 10);
     } else {
         int gap = tmClock.tmHeight / 10;
-        s->clockAreaH = tmClock.tmHeight + gap + tmDate.tmHeight + 6 + 34;
+        s->clockAreaH = clamp_clock_area(hwnd,
+            tmClock.tmHeight + gap + tmDate.tmHeight + 6 + 34);
     }
 
     s->hGuiFont = CreateFontW(16,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
@@ -885,10 +917,11 @@ static void on_size(HWND hwnd, WPARAM wp) {
 
     if (s->clock_style == CLOCK_ANALOG) {
         int box = (cr.right - cr.left) - SEP_MARGIN*2;
-        s->clockAreaH = box + 10;
+        s->clockAreaH = clamp_clock_area(hwnd, box + 10);
     } else {
         int gap = tm.tmHeight / 10;
-        s->clockAreaH = tm.tmHeight + gap + tmDate.tmHeight + 6 + 34;
+        s->clockAreaH = clamp_clock_area(hwnd,
+            tm.tmHeight + gap + tmDate.tmHeight + 6 + 34);
     }
 
     InvalidateRect(hwnd, NULL, FALSE);

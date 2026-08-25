@@ -24,6 +24,7 @@ enum { TextRenderingHintAntiAlias = 4 };
 enum { LineCapRound = 2 };
 enum { FontStyleBold = 1 };
 enum { StringAlignmentCenter = 1 };
+enum { StringFormatFlagsNoWrap = 0x00001000 };
 
 typedef struct { REAL X, Y, Width, Height; } RectF;
 
@@ -167,6 +168,41 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     SelectObject(hdc, hOldFont);
 }
 
+/* The clock font is fitted to "00:00:00", but the stopwatch draws three more
+   characters once it passes an hour and ran off both edges of the window. Falls
+   back to a proportionally smaller font just for that string. Returns NULL when
+   the normal font already fits; the caller deletes any non-NULL result. */
+static HFONT fit_text_font(HDC hdc, const AppState *s, const WCHAR *text,
+                           int maxW, SIZE *sz) {
+    HFONT prev = (HFONT)SelectObject(hdc, s->hClockFont);
+    GetTextExtentPoint32W(hdc, text, lstrlenW(text), sz);
+    if (sz->cx <= maxW || sz->cx <= 0 || maxW <= 0) {
+        SelectObject(hdc, prev);
+        return NULL;
+    }
+
+    LOGFONTW lf;
+    if (GetObjectW(s->hClockFont, sizeof(lf), &lf) == 0) {
+        SelectObject(hdc, prev);
+        return NULL;
+    }
+
+    int h = lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight;
+    int scaled = (int)((LONGLONG)h * maxW / sz->cx);
+    if (scaled < 10) scaled = 10;
+    lf.lfHeight = (lf.lfHeight < 0) ? -scaled : scaled;
+
+    HFONT fitted = CreateFontIndirectW(&lf);
+    if (!fitted) {
+        SelectObject(hdc, prev);
+        return NULL;
+    }
+    SelectObject(hdc, fitted);
+    GetTextExtentPoint32W(hdc, text, lstrlenW(text), sz);
+    SelectObject(hdc, prev);
+    return fitted;
+}
+
 void clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc, const AppState *s) {
     int totalSec = remaining_ms / 1000;
     int hh = totalSec / 3600;
@@ -181,9 +217,9 @@ void clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc
 
     SetBkMode(hdc, TRANSPARENT);
 
-    HFONT hOldFont = (HFONT)SelectObject(hdc, s->hClockFont);
     SIZE timeSize;
-    GetTextExtentPoint32W(hdc, buf, lstrlenW(buf), &timeSize);
+    HFONT fitted = fit_text_font(hdc, s, buf, rc->right - rc->left, &timeSize);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, fitted ? fitted : s->hClockFont);
 
     int cx = (rc->left + rc->right) / 2;
     int startY = rc->top + (rc->bottom - rc->top - timeSize.cy) / 2;
@@ -192,6 +228,7 @@ void clock_draw_countdown(HDC hdc, const RECT *rc, int remaining_ms, COLORREF tc
     ExtTextOutW(hdc, cx - timeSize.cx / 2, startY, 0, NULL, buf, lstrlenW(buf), NULL);
 
     SelectObject(hdc, hOldFont);
+    if (fitted) DeleteObject(fitted);
 }
 
 void clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppState *s) {
@@ -208,9 +245,9 @@ void clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppSt
 
     SetBkMode(hdc, TRANSPARENT);
 
-    HFONT hOldFont = (HFONT)SelectObject(hdc, s->hClockFont);
     SIZE timeSize;
-    GetTextExtentPoint32W(hdc, buf, lstrlenW(buf), &timeSize);
+    HFONT fitted = fit_text_font(hdc, s, buf, rc->right - rc->left, &timeSize);
+    HFONT hOldFont = (HFONT)SelectObject(hdc, fitted ? fitted : s->hClockFont);
 
     int cx = (rc->left + rc->right) / 2;
     int startY = rc->top + (rc->bottom - rc->top - timeSize.cy) / 2;
@@ -219,6 +256,7 @@ void clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppSt
     ExtTextOutW(hdc, cx - timeSize.cx / 2, startY, 0, NULL, buf, lstrlenW(buf), NULL);
 
     SelectObject(hdc, hOldFont);
+    if (fitted) DeleteObject(fitted);
 }
 
 void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const AppState *s) {
@@ -311,7 +349,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipCreateSolidFill(numArgb, &numBrush);
 
     GpStringFormat *fmt = NULL;
-    GdipCreateStringFormat(0, LANG_NEUTRAL, &fmt);
+    GdipCreateStringFormat(StringFormatFlagsNoWrap, LANG_NEUTRAL, &fmt);
     GdipSetStringFormatAlign(fmt, StringAlignmentCenter);
     GdipSetStringFormatLineAlign(fmt, StringAlignmentCenter);
 
@@ -319,7 +357,10 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
         double a = i * M_PI / 6.0 - M_PI / 2.0;
         WCHAR num[4];
         wsprintfW(num, L"%d", i);
-        REAL rw = 56.0f;
+        /* Proportional to the glyph size, not a constant: the numeral font
+           scales with the dial, so a fixed box silently dropped the second
+           digit of 10, 11 and 12 once the clock got large enough. */
+        REAL rw = (REAL)numH * 2.4f;
         REAL rh = (REAL)(numH + 6);
         RectF numRect = {
             cx + (REAL)((radius - 30) * cos(a)) - rw / 2.0f,
