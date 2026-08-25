@@ -1,5 +1,6 @@
 #include "alarms.h"
 #include "main.h"
+#include "settings_data.h"
 
 void alarms_init(AppState *s) {
     for (int i = 0; i < MAX_ALARMS; i++) {
@@ -29,7 +30,11 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st) {
             int dayBit = 1 << st->wDayOfWeek;
             if (!(s->alarms[i].repeat_days & dayBit)) continue;
         } else {
+            /* A one-shot alarm disarms itself. Persist that now rather than
+               waiting for the save on exit, so killing the process does not
+               leave it armed for tomorrow. */
             s->alarms[i].enabled = FALSE;
+            settings_save(s);
         }
 
         s->alarm_active = TRUE;

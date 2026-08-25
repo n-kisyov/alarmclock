@@ -97,8 +97,7 @@ void   theme_update_colors(AppState *s);
 void   theme_dialog_colors(HWND hDlg, AppState *s, HWND ctrl, HDC hdc);
 void   theme_dialog_init(HWND hDlg, AppState *s);
 
-BOOL   json_load_settings(AppState *s, const TCHAR *path);
-BOOL   json_save_settings(const AppState *s, const TCHAR *path);
+/* Settings load/save live in json_utils.h, which owns the result type. */
 
 void   alarms_init(AppState *s);
 BOOL   alarms_check(AppState *s, const SYSTEMTIME *st);

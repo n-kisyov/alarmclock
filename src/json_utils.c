@@ -138,146 +138,206 @@ static BOOL sb_append_json_escaped(WStringBuilder *sb, const WCHAR *text) {
     return sb_append_char(sb, L'"');
 }
 
-BOOL json_load_settings(AppState *s, const TCHAR *path) {
-    HANDLE hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) return FALSE;
+/* Reads the whole file as UTF-8 and returns it as a NUL-terminated wide string,
+   or NULL. *out_len receives the character count excluding the terminator. */
+static TCHAR *read_text_file_utf8(const TCHAR *path, int *out_len, SettingsLoadResult *why) {
+    HANDLE hFile = CreateFile(path, GENERIC_READ, FILE_SHARE_READ, NULL,
+                              OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        DWORD err = GetLastError();
+        *why = (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+                 ? SETTINGS_MISSING : SETTINGS_CORRUPT;
+        return NULL;
+    }
+
+    *why = SETTINGS_CORRUPT;
 
     DWORD sz = GetFileSize(hFile, NULL);
     if (sz == INVALID_FILE_SIZE || sz == 0) {
         CloseHandle(hFile);
-        return FALSE;
+        return NULL;
     }
 
     char *raw = (char *)malloc(sz + 1);
     if (!raw) {
         CloseHandle(hFile);
-        return FALSE;
+        return NULL;
     }
     DWORD read = 0;
     BOOL read_ok = ReadFile(hFile, raw, sz, &read, NULL);
     CloseHandle(hFile);
     if (!read_ok || read != sz) {
         free(raw);
-        return FALSE;
+        return NULL;
     }
     raw[read] = 0;
 
-    int wide_len = MultiByteToWideChar(CP_UTF8, 0, raw, -1, NULL, 0);
-    if (wide_len <= 0) {
-        free(raw);
-        return FALSE;
+    /* Skip a UTF-8 BOM if an external editor added one. */
+    const char *start = raw;
+    if (read >= 3 && (unsigned char)raw[0] == 0xEF &&
+        (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF) {
+        start += 3;
     }
 
-    TCHAR *buf = (TCHAR *)malloc((wide_len + 1) * sizeof(TCHAR));
+    int wide_len = MultiByteToWideChar(CP_UTF8, 0, start, -1, NULL, 0);
+    if (wide_len <= 0) {
+        free(raw);
+        return NULL;
+    }
+
+    TCHAR *buf = (TCHAR *)malloc((size_t)(wide_len + 1) * sizeof(TCHAR));
     if (!buf) {
         free(raw);
-        return FALSE;
+        return NULL;
     }
-    if (MultiByteToWideChar(CP_UTF8, 0, raw, -1, buf, wide_len) <= 0) {
+    if (MultiByteToWideChar(CP_UTF8, 0, start, -1, buf, wide_len) <= 0) {
         free(raw);
         free(buf);
-        return FALSE;
+        return NULL;
     }
     free(raw);
+
+    *out_len = wide_len;
+    return buf;
+}
+
+/* Parses into a scratch copy and only commits it to *s once the whole file has
+   been read successfully, so a truncated or hand-edited file can never leave
+   the app running on half-loaded settings - or, worse, save that half back. */
+SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
+    int wide_len = 0;
+    SettingsLoadResult why = SETTINGS_CORRUPT;
+    TCHAR *buf = read_text_file_utf8(path, &wide_len, &why);
+    if (!buf) return why;
+
+    AppState scratch = *s;
+    AppState *t = &scratch;
 
     JsonReader r;
     r.p = buf;
     r.end = buf + wide_len - 1;
 
-    alarms_init(s);
-    if (!json_expect(&r, L'{')) { free(buf); return FALSE; }
+    alarms_init(t);
+    if (!json_expect(&r, L'{')) { free(buf); return SETTINGS_CORRUPT; }
 
     while (1) {
         json_skip_ws(&r);
-        if (r.p >= r.end) { free(buf); return FALSE; }
+        if (r.p >= r.end) { free(buf); return SETTINGS_CORRUPT; }
         if (*r.p == L'}') { r.p++; break; }
 
         TCHAR key[128];
-        if (!json_read_string(&r, key, 128)) { free(buf); return FALSE; }
-        if (!json_expect(&r, L':')) { free(buf); return FALSE; }
+        if (!json_read_string(&r, key, 128)) { free(buf); return SETTINGS_CORRUPT; }
+        if (!json_expect(&r, L':')) { free(buf); return SETTINGS_CORRUPT; }
 
-        if (lstrcmp(key, L"dark_mode") == 0) json_read_bool(&r, &s->dark_mode);
-        else if (lstrcmp(key, L"hour24") == 0) json_read_bool(&r, &s->hour24);
-        else if (lstrcmp(key, L"crescendo") == 0) json_read_bool(&r, &s->crescendo);
-        else if (lstrcmp(key, L"autostart") == 0) json_read_bool(&r, &s->autostart);
-        else if (lstrcmp(key, L"start_minimized") == 0) json_read_bool(&r, &s->start_minimized);
-        else if (lstrcmp(key, L"acrylic") == 0) json_read_bool(&r, &s->acrylic);
-        else if (lstrcmp(key, L"always_on_top") == 0) json_read_bool(&r, &s->always_on_top);
-        else if (lstrcmp(key, L"alarms_collapsed") == 0) json_read_bool(&r, &s->alarms_collapsed);
-        else if (lstrcmp(key, L"clock_style") == 0) { TCHAR v[32]; if (json_read_string(&r, v, 32)) s->clock_style = (lstrcmp(v, L"analog") == 0) ? CLOCK_ANALOG : CLOCK_DIGITAL; }
-        else if (lstrcmp(key, L"alarms_enabled") == 0) json_read_bool(&r, &s->alarms_enabled);
-        else if (lstrcmp(key, L"alarm_count") == 0) { int ac = 5; json_read_int(&r, &ac); if (ac < 1) ac = 1; if (ac > MAX_ALARMS) ac = MAX_ALARMS; s->alarm_count = ac; }
-        else if (lstrcmp(key, L"alarm_volume") == 0) { int av = 80; json_read_int(&r, &av); if (av >= 0 && av <= 100) s->alarm_volume = av; }
-        else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm = 5; json_read_int(&r, &sm); if (sm >= 1 && sm <= 60) s->snooze_minutes = sm; }
-        else if (lstrcmp(key, L"app_mode") == 0) { int am = 0; json_read_int(&r, &am); if (am >= 0 && am <= 2) s->app_mode = am; }
-        else if (lstrcmp(key, L"win_x") == 0) json_read_int(&r, &s->winX);
-        else if (lstrcmp(key, L"win_y") == 0) json_read_int(&r, &s->winY);
-        else if (lstrcmp(key, L"win_w") == 0) json_read_int(&r, &s->winW);
-        else if (lstrcmp(key, L"win_h") == 0) json_read_int(&r, &s->winH);
-        else if (lstrcmp(key, L"sound_mode") == 0) { TCHAR v[32]; if (json_read_string(&r, v, 32)) s->sound_mode = (lstrcmp(v, L"mp3") == 0) ? SOUND_MP3 : SOUND_SIMPLE; }
-        else if (lstrcmp(key, L"cd_hours") == 0) json_read_int(&r, &s->cd_hours);
-        else if (lstrcmp(key, L"cd_mins") == 0) json_read_int(&r, &s->cd_mins);
-        else if (lstrcmp(key, L"cd_secs") == 0) json_read_int(&r, &s->cd_secs);
+        if (lstrcmp(key, L"dark_mode") == 0) json_read_bool(&r, &t->dark_mode);
+        else if (lstrcmp(key, L"hour24") == 0) json_read_bool(&r, &t->hour24);
+        else if (lstrcmp(key, L"crescendo") == 0) json_read_bool(&r, &t->crescendo);
+        else if (lstrcmp(key, L"autostart") == 0) json_read_bool(&r, &t->autostart);
+        else if (lstrcmp(key, L"start_minimized") == 0) json_read_bool(&r, &t->start_minimized);
+        else if (lstrcmp(key, L"acrylic") == 0) json_read_bool(&r, &t->acrylic);
+        else if (lstrcmp(key, L"always_on_top") == 0) json_read_bool(&r, &t->always_on_top);
+        else if (lstrcmp(key, L"alarms_collapsed") == 0) json_read_bool(&r, &t->alarms_collapsed);
+        else if (lstrcmp(key, L"clock_style") == 0) { TCHAR v[32]; if (json_read_string(&r, v, 32)) t->clock_style = (lstrcmp(v, L"analog") == 0) ? CLOCK_ANALOG : CLOCK_DIGITAL; }
+        else if (lstrcmp(key, L"alarms_enabled") == 0) json_read_bool(&r, &t->alarms_enabled);
+        else if (lstrcmp(key, L"alarm_count") == 0) { int ac = 5; json_read_int(&r, &ac); if (ac < 1) ac = 1; if (ac > MAX_ALARMS) ac = MAX_ALARMS; t->alarm_count = ac; }
+        else if (lstrcmp(key, L"alarm_volume") == 0) { int av = 80; json_read_int(&r, &av); if (av >= 10 && av <= 100) t->alarm_volume = av; }
+        else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm = 5; json_read_int(&r, &sm); if (sm >= 1 && sm <= 60) t->snooze_minutes = sm; }
+        else if (lstrcmp(key, L"app_mode") == 0) { int am = 0; json_read_int(&r, &am); if (am >= 0 && am <= 2) t->app_mode = am; }
+        else if (lstrcmp(key, L"win_x") == 0) json_read_int(&r, &t->winX);
+        else if (lstrcmp(key, L"win_y") == 0) json_read_int(&r, &t->winY);
+        else if (lstrcmp(key, L"win_w") == 0) json_read_int(&r, &t->winW);
+        else if (lstrcmp(key, L"win_h") == 0) json_read_int(&r, &t->winH);
+        else if (lstrcmp(key, L"sound_mode") == 0) { TCHAR v[32]; if (json_read_string(&r, v, 32)) t->sound_mode = (lstrcmp(v, L"mp3") == 0) ? SOUND_MP3 : SOUND_SIMPLE; }
+        else if (lstrcmp(key, L"cd_hours") == 0) json_read_int(&r, &t->cd_hours);
+        else if (lstrcmp(key, L"cd_mins") == 0) json_read_int(&r, &t->cd_mins);
+        else if (lstrcmp(key, L"cd_secs") == 0) json_read_int(&r, &t->cd_secs);
         else if (lstrcmp(key, L"alarms") == 0) {
-            if (!json_expect(&r, L'[')) { free(buf); return FALSE; }
+            if (!json_expect(&r, L'[')) { free(buf); return SETTINGS_CORRUPT; }
             int idx = 0;
-            while (idx < MAX_ALARMS) {
+            while (1) {
                 json_skip_ws(&r);
-                if (r.p >= r.end || *r.p == L']') { r.p++; break; }
-                if (!json_expect(&r, L'{')) { free(buf); return FALSE; }
+                if (r.p >= r.end) { free(buf); return SETTINGS_CORRUPT; }
+                if (*r.p == L']') { r.p++; break; }
+                if (!json_expect(&r, L'{')) { free(buf); return SETTINGS_CORRUPT; }
+
+                /* Entries past MAX_ALARMS are parsed and discarded rather than
+                   abandoned mid-array, which would desync the reader. */
+                Alarm discard;
+                Alarm *a = (idx < MAX_ALARMS) ? &t->alarms[idx] : &discard;
+                if (a == &discard) {
+                    a->hour = ALARM_UNSET; a->minute = ALARM_UNSET;
+                    a->enabled = FALSE; a->label[0] = 0; a->repeat_days = 0;
+                }
+
                 BOOL hasRepeatDays = FALSE;
                 while (1) {
                     json_skip_ws(&r);
-                    if (r.p >= r.end) { free(buf); return FALSE; }
+                    if (r.p >= r.end) { free(buf); return SETTINGS_CORRUPT; }
                     if (*r.p == L'}') { r.p++; break; }
 
                     TCHAR akey[64];
-                    if (!json_read_string(&r, akey, 64)) { free(buf); return FALSE; }
-                    if (!json_expect(&r, L':')) { free(buf); return FALSE; }
+                    if (!json_read_string(&r, akey, 64)) { free(buf); return SETTINGS_CORRUPT; }
+                    if (!json_expect(&r, L':')) { free(buf); return SETTINGS_CORRUPT; }
 
-                    if (lstrcmp(akey, L"hour") == 0) json_read_int(&r, &s->alarms[idx].hour);
-                    else if (lstrcmp(akey, L"minute") == 0) json_read_int(&r, &s->alarms[idx].minute);
-                    else if (lstrcmp(akey, L"enabled") == 0) json_read_bool(&r, &s->alarms[idx].enabled);
-                    else if (lstrcmp(akey, L"label") == 0) { TCHAR lb[32]; if (json_read_string(&r, lb, 32)) lstrcpynW(s->alarms[idx].label, lb, 32); }
-                    else if (lstrcmp(akey, L"repeat_days") == 0) { int rd = 0; json_read_int(&r, &rd); s->alarms[idx].repeat_days = (BYTE)rd; hasRepeatDays = TRUE; }
+                    if (lstrcmp(akey, L"hour") == 0) json_read_int(&r, &a->hour);
+                    else if (lstrcmp(akey, L"minute") == 0) json_read_int(&r, &a->minute);
+                    else if (lstrcmp(akey, L"enabled") == 0) json_read_bool(&r, &a->enabled);
+                    else if (lstrcmp(akey, L"label") == 0) { TCHAR lb[32]; if (json_read_string(&r, lb, 32)) lstrcpynW(a->label, lb, 32); }
+                    else if (lstrcmp(akey, L"repeat_days") == 0) { int rd = 0; json_read_int(&r, &rd); a->repeat_days = (BYTE)rd; hasRepeatDays = TRUE; }
                     else if (lstrcmp(akey, L"repeat") == 0) {
                         int rm = 0;
                         json_read_int(&r, &rm);
                         if (!hasRepeatDays) {
-                            if (rm == 0) s->alarms[idx].repeat_days = 0;
-                            else if (rm == 1) s->alarms[idx].repeat_days = 0x7F;
-                            else if (rm == 2) s->alarms[idx].repeat_days = 0x3E;
-                            else if (rm == 3) s->alarms[idx].repeat_days = 0x41;
+                            if (rm == 0) a->repeat_days = 0;
+                            else if (rm == 1) a->repeat_days = 0x7F;
+                            else if (rm == 2) a->repeat_days = 0x3E;
+                            else if (rm == 3) a->repeat_days = 0x41;
                         }
                     }
 
                     json_skip_ws(&r);
-                    if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return FALSE; } }
+                    if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return SETTINGS_CORRUPT; } }
                 }
+
+                /* An hour or minute outside range means the slot is unset. */
+                if (a->hour < 0 || a->hour > 23 || a->minute < 0 || a->minute > 59) {
+                    a->hour = ALARM_UNSET;
+                    a->minute = ALARM_UNSET;
+                    a->enabled = FALSE;
+                }
+
                 idx++;
                 json_skip_ws(&r);
-                if (r.p < r.end && *r.p != L']') { if (!json_expect(&r, L',')) { free(buf); return FALSE; } }
+                if (r.p < r.end && *r.p != L']') { if (!json_expect(&r, L',')) { free(buf); return SETTINGS_CORRUPT; } }
             }
-            json_skip_ws(&r);
-            if (r.p < r.end && *r.p == L']') r.p++;
         }
 
         json_skip_ws(&r);
-        if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return FALSE; } }
+        if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return SETTINGS_CORRUPT; } }
     }
 
     free(buf);
-    theme_update_colors(s);
-    if (s->cd_remaining_ms == 0)
-        s->cd_remaining_ms = (s->cd_hours * 3600 + s->cd_mins * 60 + s->cd_secs) * 1000;
 
-    return TRUE;
+    if (t->cd_remaining_ms == 0)
+        t->cd_remaining_ms = (t->cd_hours * 3600 + t->cd_mins * 60 + t->cd_secs) * 1000;
+
+    *s = scratch;
+    return SETTINGS_OK;
 }
+
+/* Writes to a sibling .tmp and swaps it into place, so an interrupted write
+   leaves the previous settings intact instead of a truncated file. The swap
+   also leaves the outgoing file behind as .bak for recovery. */
 BOOL json_save_settings(const AppState *s, const TCHAR *path) {
     WStringBuilder sb = {0};
     HANDLE hFile = INVALID_HANDLE_VALUE;
     char *utf8buf = NULL;
     BOOL ok = FALSE;
+    WCHAR tmpPath[MAX_PATH];
+    WCHAR bakPath[MAX_PATH];
+
+    if (FAILED(StringCchPrintfW(tmpPath, MAX_PATH, L"%s.tmp", path))) return FALSE;
+    if (FAILED(StringCchPrintfW(bakPath, MAX_PATH, L"%s.bak", path))) return FALSE;
 
     if (!sb_append_text(&sb,
         L"{\n"
@@ -333,7 +393,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
 
     if (!sb_append_text(&sb, L"  ]\n}\n")) goto cleanup;
 
-    hFile = CreateFile(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    hFile = CreateFile(tmpPath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (hFile == INVALID_HANDLE_VALUE) goto cleanup;
 
     int utf8_len = WideCharToMultiByte(CP_UTF8, 0, sb.buf, -1, NULL, 0, NULL, NULL);
@@ -348,10 +408,25 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
     DWORD written = 0;
     if (!WriteFile(hFile, utf8buf, to_write, &written, NULL) || written != to_write) goto cleanup;
 
+    /* Get the bytes on disk before the swap, so a crash during the swap cannot
+       promote a partially flushed file. */
+    FlushFileBuffers(hFile);
+    CloseHandle(hFile);
+    hFile = INVALID_HANDLE_VALUE;
+
+    if (GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
+        if (!ReplaceFileW(path, tmpPath, bakPath, REPLACEFILE_IGNORE_MERGE_ERRORS, NULL, NULL))
+            goto cleanup;
+    } else {
+        if (!MoveFileExW(tmpPath, path, MOVEFILE_REPLACE_EXISTING))
+            goto cleanup;
+    }
+
     ok = TRUE;
 
 cleanup:
     if (hFile != INVALID_HANDLE_VALUE) CloseHandle(hFile);
+    if (!ok) DeleteFileW(tmpPath);
     free(utf8buf);
     free(sb.buf);
     return ok;
