@@ -22,7 +22,7 @@
   "cd_mins": 0,
   "cd_secs": 0,
   "alarms": [
-    {"hour": 0, "minute": 0, "enabled": true, "label": "", "repeat_days": 0},
+    {"hour": 0, "minute": 0, "enabled": false, "label": "", "repeat_days": 0},
     {"hour": 0, "minute": 5, "enabled": false, "label": "", "repeat_days": 0},
     {"hour": 0, "minute": 0, "enabled": false, "label": "", "repeat_days": 0},
     {"hour": 0, "minute": 0, "enabled": false, "label": "", "repeat_days": 0},
