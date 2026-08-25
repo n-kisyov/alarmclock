@@ -94,11 +94,11 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     }
     wsprintf(timeBuf, L"%02d:%02d:%02d", h, st->wMinute, st->wSecond);
 
-    const TCHAR *months[] = {
-        L"January", L"February", L"March", L"April", L"May", L"June",
-        L"July", L"August", L"September", L"October", L"November", L"December"
-    };
-    wsprintf(dateBuf, L"%s %d, %d", months[st->wMonth - 1], st->wDay, st->wYear);
+    /* The user's own long-date format, rather than a hardcoded English table. */
+    if (GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, DATE_LONGDATE, st, NULL,
+                        dateBuf, ARRAYSIZE(dateBuf), NULL) == 0) {
+        wsprintf(dateBuf, L"%04d-%02d-%02d", st->wYear, st->wMonth, st->wDay);
+    }
 
     SetBkMode(hdc, TRANSPARENT);
 
@@ -408,6 +408,34 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipDrawLine(gr, hourPen, cx, cy,
         cx + (REAL)(hLen * cos(hourAngle)), cy + (REAL)(hLen * sin(hourAngle)));
     GdipDeletePen(hourPen);
+
+    /* AM/PM marker - a 12-hour dial alone cannot tell noon from midnight. */
+    if (!s->hour24) {
+        GpFontFamily *apFamily = NULL;
+        GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &apFamily);
+        if (apFamily) {
+            GpFont *apFont = NULL;
+            GdipCreateFont(apFamily, (REAL)numH * 0.62f, 0, UnitPixel, &apFont);
+            GpSolidFill *apBrush = NULL;
+            GdipCreateSolidFill(tickArgb, &apBrush);
+            GpStringFormat *apFmt = NULL;
+            GdipCreateStringFormat(StringFormatFlagsNoWrap, LANG_NEUTRAL, &apFmt);
+            GdipSetStringFormatAlign(apFmt, StringAlignmentCenter);
+            GdipSetStringFormatLineAlign(apFmt, StringAlignmentCenter);
+
+            const WCHAR *ap = (lt.wHour >= 12) ? L"PM" : L"AM";
+            REAL apW = (REAL)numH * 2.0f;
+            REAL apH = (REAL)numH;
+            RectF apRect = { cx - apW / 2.0f, cy + radius * 0.34f, apW, apH };
+            if (apFont && apBrush && apFmt)
+                GdipDrawString(gr, ap, 2, apFont, &apRect, apFmt, (GpBrush*)apBrush);
+
+            if (apFmt)   GdipDeleteStringFormat(apFmt);
+            if (apBrush) GdipDeleteBrush((GpBrush*)apBrush);
+            if (apFont)  GdipDeleteFont(apFont);
+            GdipDeleteFontFamily(apFamily);
+        }
+    }
 
     /* Center dot */
     GpSolidFill *dotBrush = NULL;
