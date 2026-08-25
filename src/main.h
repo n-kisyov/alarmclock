@@ -69,6 +69,7 @@ typedef struct {
     HFONT    hGuiFont;
     WCHAR    clockFaceName[64];
     int      clockAreaH;
+    int      dpi;            /* pixels per inch for this window; 96 == 100% */
 
     HBRUSH   hBgBrush;
     HBRUSH   hPanelBrush;

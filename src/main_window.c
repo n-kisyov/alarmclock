@@ -10,6 +10,10 @@
 #include "settings_data.h"
 #include <strsafe.h>
 
+/* Layout constants are authored at 96 dpi and scaled through S() at the point
+   of use. The manifest claims PerMonitorV2, which tells Windows not to scale
+   the app for us, so without this everything stayed physically small on a
+   high-dpi display while the dialogs - which use dialog units - grew. */
 #define ALARM_PAD_X      10
 #define ALARM_PAD_Y      8
 #define ALARM_ROW_H      30
@@ -19,6 +23,30 @@
 #define ALARM_BTN_H      22
 #define ALARM_BTN_GAP    5
 #define SEP_MARGIN       8
+
+#define S(v)  MulDiv((v), g_state.dpi ? g_state.dpi : 96, 96)
+
+static int window_dpi(HWND hwnd) {
+    typedef UINT (WINAPI *PFN_GetDpiForWindow)(HWND);
+    static PFN_GetDpiForWindow pGetDpiForWindow = NULL;
+    static BOOL resolved = FALSE;
+
+    if (!resolved) {
+        resolved = TRUE;
+        HMODULE user32 = GetModuleHandleW(L"user32.dll");
+        if (user32)
+            pGetDpiForWindow =
+                (PFN_GetDpiForWindow)(void *)GetProcAddress(user32, "GetDpiForWindow");
+    }
+    if (pGetDpiForWindow) {
+        UINT d = pGetDpiForWindow(hwnd);
+        if (d) return (int)d;
+    }
+    HDC hdc = GetDC(hwnd);
+    int d = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96;
+    if (hdc) ReleaseDC(hwnd, hdc);
+    return d ? d : 96;
+}
 
 /* ---------- layout helpers ---------- */
 
@@ -35,18 +63,19 @@ static void calc_clock_rect(HWND hwnd, RECT *rc) {
 static int clamp_clock_area(HWND hwnd, int desired) {
     RECT cr;
     GetClientRect(hwnd, &cr);
-    int panelMin = 4 + ALARM_HEADER_H + 17 + ALARM_PAD_Y;
+    int panelMin = S(4 + ALARM_HEADER_H + 17 + ALARM_PAD_Y);
     int maxH = (cr.bottom - cr.top) - panelMin;
-    if (maxH < 80) maxH = 80;
+    int floorH = S(80);
+    if (maxH < floorH) maxH = floorH;
     if (desired > maxH) desired = maxH;
-    if (desired < 80) desired = 80;
+    if (desired < floorH) desired = floorH;
     return desired;
 }
 
 static HFONT create_fitted_clock_font(HWND hwnd, const WCHAR *faceName) {
     RECT cr;
     GetClientRect(hwnd, &cr);
-    int availW = cr.right - cr.left - SEP_MARGIN * 2 - 8;
+    int availW = cr.right - cr.left - S(SEP_MARGIN) * 2 - S(8);
 
     HDC hdc = GetDC(hwnd);
     int lo = 20, hi = 600, best = 60;
@@ -74,61 +103,61 @@ static void calc_alarm_rects(HWND hwnd, RECT *panel, RECT *header, RECT *srcCloc
     GetClientRect(hwnd, &cr);
     int cw = cr.right - cr.left;
     int sepY = srcClock->bottom;
-    int panW = cw - ALARM_PAD_X * 2;
-    int panX = ALARM_PAD_X;
-    int panY = sepY + 4;
-    int availH = cr.bottom - panY - ALARM_PAD_Y;
+    int panW = cw - S(ALARM_PAD_X) * 2;
+    int panX = S(ALARM_PAD_X);
+    int panY = sepY + S(4);
+    int availH = cr.bottom - panY - S(ALARM_PAD_Y);
 
     int rowCount = g_state.alarms_collapsed ? 0 : g_state.alarm_count;
-    int minH = ALARM_HEADER_H + 17;
-    int maxH = ALARM_HEADER_H + 6 + rowCount * ALARM_ROW_H + 21;
+    int minH = S(ALARM_HEADER_H + 17);
+    int maxH = S(ALARM_HEADER_H + 6) + rowCount * S(ALARM_ROW_H) + S(21);
 
     int panH = availH;
     if (panH < minH) panH = minH;
     if (panH > maxH) panH = maxH;
     panel->left = panX; panel->top = panY;
     panel->right = panX + panW; panel->bottom = panY + panH;
-    header->left = panX + 12; header->top = panY + 6;
-    header->right = panX + panW - 12; header->bottom = header->top + ALARM_HEADER_H;
+    header->left = panX + S(12); header->top = panY + S(6);
+    header->right = panX + panW - S(12); header->bottom = header->top + S(ALARM_HEADER_H);
 }
 
 /* How many rows actually fit inside the panel. On a short window the panel
    shrinks to its header, and rows drawn past its bottom edge spilled onto the
    background. */
 static int alarm_visible_rows(const RECT *panel, const RECT *header) {
-    int avail = panel->bottom - (header->bottom + 2);
-    int n = (avail > 0) ? avail / ALARM_ROW_H : 0;
+    int avail = panel->bottom - (header->bottom + S(2));
+    int n = (avail > 0) ? avail / S(ALARM_ROW_H) : 0;
     if (n > g_state.alarm_count) n = g_state.alarm_count;
     return n;
 }
 
 static RECT get_alarm_row_rect(const RECT *panel, const RECT *header, int idx) {
     RECT r;
-    int baseY = header->bottom + 2;
-    r.left = panel->left + 8; r.top = baseY + idx * ALARM_ROW_H;
-    r.right = panel->right - 8; r.bottom = r.top + ALARM_ROW_H;
+    int baseY = header->bottom + S(2);
+    r.left = panel->left + S(8); r.top = baseY + idx * S(ALARM_ROW_H);
+    r.right = panel->right - S(8); r.bottom = r.top + S(ALARM_ROW_H);
     return r;
 }
 static RECT get_check_rect(const RECT *alarmRow) {
     RECT r;
     int cy = (alarmRow->top + alarmRow->bottom) / 2;
-    r.left = alarmRow->left + ALARM_PAD_X; r.top = cy - ALARM_CHK_SIZE / 2;
-    r.right = r.left + ALARM_CHK_SIZE; r.bottom = r.top + ALARM_CHK_SIZE;
+    r.left = alarmRow->left + S(ALARM_PAD_X); r.top = cy - S(ALARM_CHK_SIZE) / 2;
+    r.right = r.left + S(ALARM_CHK_SIZE); r.bottom = r.top + S(ALARM_CHK_SIZE);
     return r;
 }
 /* Clear is furthest from the alarm it destroys, and Edit - the one you
    actually want most of the time - reads first. */
 static RECT get_clear_rect(const RECT *alarmRow) {
     RECT r;
-    r.right = alarmRow->right - 8; r.left = r.right - ALARM_BTN_W;
-    r.top = alarmRow->top + (ALARM_ROW_H - ALARM_BTN_H) / 2;
-    r.bottom = r.top + ALARM_BTN_H;
+    r.right = alarmRow->right - S(8); r.left = r.right - S(ALARM_BTN_W);
+    r.top = alarmRow->top + (S(ALARM_ROW_H) - S(ALARM_BTN_H)) / 2;
+    r.bottom = r.top + S(ALARM_BTN_H);
     return r;
 }
 static RECT get_edit_rect(const RECT *alarmRow) {
     RECT clear = get_clear_rect(alarmRow);
     RECT r;
-    r.right = clear.left - ALARM_BTN_GAP; r.left = r.right - ALARM_BTN_W;
+    r.right = clear.left - S(ALARM_BTN_GAP); r.left = r.right - S(ALARM_BTN_W);
     r.top = clear.top; r.bottom = clear.bottom;
     return r;
 }
@@ -136,17 +165,71 @@ static RECT get_edit_rect(const RECT *alarmRow) {
 /* Settings moved off the menu bar and into the panel header. */
 static RECT get_settings_rect(const RECT *header) {
     RECT r;
-    r.right  = header->right - 26;
-    r.left   = r.right - 62;
+    r.right  = header->right - S(26);
+    r.left   = r.right - S(62);
     r.top    = header->top;
-    r.bottom = header->top + ALARM_HEADER_H;
+    r.bottom = header->top + S(ALARM_HEADER_H);
     return r;
+}
+
+/* ---------- pointer state ----------
+
+   Controls act on button-up, not button-down, and only if the cursor is still
+   over the control that was pressed - so a stray press on DISMISS can be
+   dragged off and cancelled. Hover and pressed are tracked so the drawn
+   controls actually look like controls. */
+
+typedef enum {
+    HT_NONE = 0,
+    HT_MODE,          /* index is a ModeButtonId */
+    HT_SETTINGS,
+    HT_COLLAPSE,
+    HT_ALARM_CHECK,   /* index is the alarm slot */
+    HT_ALARM_EDIT,
+    HT_ALARM_CLEAR
+} HitKind;
+
+typedef struct {
+    HitKind kind;
+    int     index;
+    RECT    rect;
+} HitTarget;
+
+typedef enum { BTN_NORMAL, BTN_HOVER, BTN_PRESSED } BtnState;
+
+static HitTarget g_pressed;     /* control currently held down */
+static BOOL      g_pressedIn;   /* ...and whether the cursor is still on it */
+static HitTarget g_hover;
+static BOOL      g_tracking;    /* WM_MOUSELEAVE requested */
+
+static BtnState btn_state(HitKind kind, int index) {
+    if (g_pressed.kind == kind && g_pressed.index == index)
+        return g_pressedIn ? BTN_PRESSED : BTN_HOVER;
+    if (g_pressed.kind == HT_NONE && g_hover.kind == kind && g_hover.index == index)
+        return BTN_HOVER;
+    return BTN_NORMAL;
+}
+
+static COLORREF shade(COLORREF c, int delta) {
+    int r = GetRValue(c) + delta;
+    int g = GetGValue(c) + delta;
+    int b = GetBValue(c) + delta;
+    if (r < 0) r = 0;
+    if (r > 255) r = 255;
+    if (g < 0) g = 0;
+    if (g > 255) g = 255;
+    if (b < 0) b = 0;
+    if (b > 255) b = 255;
+    return RGB(r, g, b);
 }
 
 /* ---------- drawing helpers ---------- */
 
 static void draw_button(HDC hdc, const RECT *r, const TCHAR *text,
-                         COLORREF bg, COLORREF fg) {
+                         COLORREF bg, COLORREF fg, BtnState st) {
+    if (st == BTN_HOVER)        bg = shade(bg,  22);
+    else if (st == BTN_PRESSED) bg = shade(bg, -28);
+
     HBRUSH hBr = CreateSolidBrush(bg);
     HPEN   hPn = CreatePen(PS_SOLID, 1, fg);
     HBRUSH hOldBr = (HBRUSH)SelectObject(hdc, hBr);
@@ -162,12 +245,8 @@ static void draw_button(HDC hdc, const RECT *r, const TCHAR *text,
 }
 
 static void draw_highlighted_button(HDC hdc, const RECT *r, const TCHAR *text,
-                                     COLORREF bg, COLORREF fg) {
-    COLORREF hlBg = RGB(
-        (GetRValue(bg) + 40 > 255 ? 255 : GetRValue(bg) + 40),
-        (GetGValue(bg) + 40 > 255 ? 255 : GetGValue(bg) + 40),
-        (GetBValue(bg) + 40 > 255 ? 255 : GetBValue(bg) + 40));
-    draw_button(hdc, r, text, hlBg, fg);
+                                     COLORREF bg, COLORREF fg, BtnState st) {
+    draw_button(hdc, r, text, shade(bg, 40), fg, st);
 }
 
 static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
@@ -193,7 +272,8 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
     SelectObject(hdc, hOldFont);
 
     draw_button(hdc, &settingsR, L"Settings",
-                s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
+                s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor,
+                btn_state(HT_SETTINGS, 0));
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, s->textColor);
@@ -266,8 +346,8 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         SelectObject(hdc, hRowFont);
 
         COLORREF btnBg = s->dark_mode ? RGB(0x45, 0x45, 0x45) : RGB(0xE0, 0xE0, 0xE0);
-        draw_button(hdc, &editR, L"Edit", btnBg, s->textColor);
-        draw_button(hdc, &clrR, L"Clear", btnBg, s->textColor);
+        draw_button(hdc, &editR, L"Edit",  btnBg, s->textColor, btn_state(HT_ALARM_EDIT, i));
+        draw_button(hdc, &clrR,  L"Clear", btnBg, s->textColor, btn_state(HT_ALARM_CLEAR, i));
     }
     SelectObject(hdc, hOldBr); SelectObject(hdc, hOldPn);
 }
@@ -344,11 +424,12 @@ static void mb_add_label(ModeBar *bar, const WCHAR *text, int width, COLORREF fg
 static void mb_layout(ModeBar *bar, const RECT *clockRect) {
     int total = 0;
     for (int i = 0; i < bar->count; i++) {
+        bar->items[i].width = S(bar->items[i].width);
         total += bar->items[i].width;
-        if (i) total += MODE_BAR_GAP;
+        if (i) total += S(MODE_BAR_GAP);
     }
     int cx  = clockRect->left + (clockRect->right - clockRect->left) / 2;
-    int top = clockRect->bottom - MODE_BAR_H - MODE_BAR_BOTTOM;
+    int top = clockRect->bottom - S(MODE_BAR_H) - S(MODE_BAR_BOTTOM);
     int x   = cx - total / 2;
 
     for (int i = 0; i < bar->count; i++) {
@@ -356,8 +437,8 @@ static void mb_layout(ModeBar *bar, const RECT *clockRect) {
         it->rect.left   = x;
         it->rect.right  = x + it->width;
         it->rect.top    = top;
-        it->rect.bottom = top + MODE_BAR_H;
-        x += it->width + MODE_BAR_GAP;
+        it->rect.bottom = top + S(MODE_BAR_H);
+        x += it->width + S(MODE_BAR_GAP);
     }
 }
 
@@ -433,34 +514,23 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
                       DT_CENTER | DT_VCENTER | DT_SINGLELINE);
             SelectObject(hdc, hOld);
         } else if (it->highlight) {
-            draw_highlighted_button(hdc, &it->rect, it->text, it->bg, it->fg);
+            draw_highlighted_button(hdc, &it->rect, it->text, it->bg, it->fg,
+                                    btn_state(HT_MODE, (int)it->id));
         } else {
-            draw_button(hdc, &it->rect, it->text, it->bg, it->fg);
+            draw_button(hdc, &it->rect, it->text, it->bg, it->fg,
+                        btn_state(HT_MODE, (int)it->id));
         }
     }
 }
 
-/* ---------- mode bar hit testing ---------- */
+/* ---------- mode bar actions ---------- */
 
-/* TRUE if the click landed on a button, so the caller stops looking. */
-static BOOL on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
+static void mode_action(HWND hwnd, ModeButtonId hit) {
     AppState *s = &g_state;
-    ModeBar bar;
-    build_mode_bar(s, clockRect, &bar);
-
-    POINT pt = { mx, my };
-    ModeButtonId hit = MB_NONE;
-    for (int i = 0; i < bar.count; i++) {
-        if (!bar.items[i].isLabel && PtInRect(&bar.items[i].rect, pt)) {
-            hit = bar.items[i].id;
-            break;
-        }
-    }
-    if (hit == MB_NONE) return FALSE;
 
     switch (hit) {
-    case MB_SNOOZE:  snooze_alarm();  return TRUE;
-    case MB_DISMISS: dismiss_alarm(); return TRUE;
+    case MB_SNOOZE:  snooze_alarm();  return;
+    case MB_DISMISS: dismiss_alarm(); return;
 
     case MB_TO_CLOCK:
         s->app_mode = APP_MODE_CLOCK;
@@ -505,11 +575,10 @@ static BOOL on_mode_click(HWND hwnd, int mx, int my, const RECT *clockRect) {
 
     case MB_NONE:
     default:
-        return FALSE;
+        return;
     }
 
     InvalidateRect(hwnd, NULL, FALSE);
-    return TRUE;
 }
 
 /* ---------- snooze / dismiss ---------- */
@@ -607,15 +676,15 @@ static void on_paint(HWND hwnd) {
     HPEN hSep = CreatePen(PS_SOLID, 1,
         g_state.dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xC0,0xC0,0xC0));
     SelectObject(hdcMem, hSep);
-    MoveToEx(hdcMem, cr.left + SEP_MARGIN, clockRect.bottom, NULL);
-    LineTo(hdcMem, cr.right - SEP_MARGIN, clockRect.bottom);
+    MoveToEx(hdcMem, cr.left + S(SEP_MARGIN), clockRect.bottom, NULL);
+    LineTo(hdcMem, cr.right - S(SEP_MARGIN), clockRect.bottom);
     DeleteObject(hSep);
 
     SYSTEMTIME st;
     GetLocalTime(&st);
 
     RECT clkInner = clockRect;
-    clkInner.top += 3; clkInner.bottom -= 36;
+    clkInner.top += S(3); clkInner.bottom -= S(36);
 
     DWORD swElapsed = g_state.sw_accumulated_ms;
     if (g_state.sw_running)
@@ -654,105 +723,289 @@ static void on_paint(HWND hwnd) {
 
 /* ---------- message handlers ---------- */
 
-static void on_lbuttondown(HWND hwnd, LPARAM lp) {
-    int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
-    RECT clockRect; calc_clock_rect(hwnd, &clockRect);
+/* Pure geometry: works out what is under a point without changing anything, so
+   the same routine can drive hover, press and release. */
+static BOOL hit_test(HWND hwnd, int mx, int my, HitTarget *out) {
+    POINT pt = { mx, my };
+    out->kind = HT_NONE;
+    out->index = 0;
+    SetRectEmpty(&out->rect);
 
-    if (on_mode_click(hwnd, mx, my, &clockRect)) return;
+    RECT clockRect;
+    calc_clock_rect(hwnd, &clockRect);
+
+    ModeBar bar;
+    build_mode_bar(&g_state, &clockRect, &bar);
+    for (int i = 0; i < bar.count; i++) {
+        if (!bar.items[i].isLabel && PtInRect(&bar.items[i].rect, pt)) {
+            out->kind  = HT_MODE;
+            out->index = (int)bar.items[i].id;
+            out->rect  = bar.items[i].rect;
+            return TRUE;
+        }
+    }
 
     RECT panel, header;
     calc_alarm_rects(hwnd, &panel, &header, &clockRect);
 
     RECT settingsR = get_settings_rect(&header);
-    if (PtInRect(&settingsR, (POINT){mx, my})) {
-        SendMessageW(hwnd, WM_COMMAND, IDM_SETTINGS, 0);
-        return;
+    if (PtInRect(&settingsR, pt)) {
+        out->kind = HT_SETTINGS;
+        out->rect = settingsR;
+        return TRUE;
     }
 
-    /* Collapse arrow hit test */
     RECT arrowR = header;
-    arrowR.left = arrowR.right - 24;
-    if (PtInRect(&arrowR, (POINT){mx, my})) {
-        g_state.alarms_collapsed = !g_state.alarms_collapsed;
-
-        /* Resize window to fit */
-        int panelH = ALARM_HEADER_H + 17;
-        if (!g_state.alarms_collapsed)
-            panelH = ALARM_HEADER_H + g_state.alarm_count * ALARM_ROW_H + 27;
-
-        int clientH = g_state.clockAreaH + 4 + panelH;
-
-        RECT wr, cr;
-        GetWindowRect(hwnd, &wr);
-        GetClientRect(hwnd, &cr);
-        int chromeH = (wr.bottom - wr.top) - (cr.bottom - cr.top);
-
-        if (!IsZoomed(hwnd)) {
-            SetWindowPos(hwnd, NULL, 0, 0, wr.right - wr.left,
-                         clientH + chromeH, SWP_NOMOVE | SWP_NOZORDER);
-        }
-
-        InvalidateRect(hwnd, NULL, FALSE);
-        return;
+    arrowR.left = arrowR.right - S(24);
+    if (PtInRect(&arrowR, pt)) {
+        out->kind = HT_COLLAPSE;
+        out->rect = arrowR;
+        return TRUE;
     }
 
-    int visibleRows = alarm_visible_rows(&panel, &header);
-    for (int i = 0; i < visibleRows; i++) {
-        RECT rowR = get_alarm_row_rect(&panel, &header, i);
-        RECT chkR = get_check_rect(&rowR);
-        RECT editR = get_edit_rect(&rowR);
-        RECT clrR = get_clear_rect(&rowR);
+    /* Collapsed means no rows are drawn, so none can be clicked either - the
+       old hit test went on matching rows that were not on screen. */
+    if (g_state.alarms_collapsed) return FALSE;
 
-        if (PtInRect(&chkR, (POINT){mx, my})) {
-            if (g_state.alarms[i].hour != ALARM_UNSET) {
-                g_state.alarms[i].enabled = !g_state.alarms[i].enabled;
-                settings_save(&g_state);
-                InvalidateRect(hwnd, NULL, FALSE);
-            }
+    int rows = alarm_visible_rows(&panel, &header);
+    for (int i = 0; i < rows; i++) {
+        RECT rowR  = get_alarm_row_rect(&panel, &header, i);
+        RECT chkR  = get_check_rect(&rowR);
+        RECT editR = get_edit_rect(&rowR);
+        RECT clrR  = get_clear_rect(&rowR);
+
+        if (PtInRect(&chkR, pt))  { out->kind = HT_ALARM_CHECK; out->index = i; out->rect = chkR;  return TRUE; }
+        if (PtInRect(&editR, pt)) { out->kind = HT_ALARM_EDIT;  out->index = i; out->rect = editR; return TRUE; }
+        if (PtInRect(&clrR, pt))  { out->kind = HT_ALARM_CLEAR; out->index = i; out->rect = clrR;  return TRUE; }
+    }
+    return FALSE;
+}
+
+static void toggle_alarm_panel(HWND hwnd) {
+    g_state.alarms_collapsed = !g_state.alarms_collapsed;
+
+    int panelH = S(ALARM_HEADER_H + 17);
+    if (!g_state.alarms_collapsed)
+        panelH = S(ALARM_HEADER_H) + g_state.alarm_count * S(ALARM_ROW_H) + S(27);
+
+    int clientH = g_state.clockAreaH + S(4) + panelH;
+
+    RECT wr, cr;
+    GetWindowRect(hwnd, &wr);
+    GetClientRect(hwnd, &cr);
+    int chromeH = (wr.bottom - wr.top) - (cr.bottom - cr.top);
+
+    if (!IsZoomed(hwnd)) {
+        SetWindowPos(hwnd, NULL, 0, 0, wr.right - wr.left,
+                     clientH + chromeH, SWP_NOMOVE | SWP_NOZORDER);
+    }
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void edit_alarm(HWND hwnd, int i) {
+    AlarmEditData data;
+    data.hour        = g_state.alarms[i].hour;
+    data.minute      = g_state.alarms[i].minute;
+    data.enabled     = g_state.alarms[i].enabled;
+    data.repeat_days = g_state.alarms[i].repeat_days;
+    lstrcpyW(data.label, g_state.alarms[i].label);
+
+    if (DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_ALARM),
+                        hwnd, alarm_dlg_proc, (LPARAM)&data) == IDOK) {
+        g_state.alarms[i].hour        = data.hour;
+        g_state.alarms[i].minute      = data.minute;
+        g_state.alarms[i].enabled     = data.enabled;
+        g_state.alarms[i].repeat_days = data.repeat_days;
+        lstrcpyW(g_state.alarms[i].label, data.label);
+        settings_save(&g_state);
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+}
+
+static void clear_alarm(HWND hwnd, int i) {
+    if (g_state.alarms[i].hour != ALARM_UNSET) {
+        if (MessageBoxW(hwnd,
+                L"Clear this alarm?\n\nIts time, label and repeat days "
+                L"will be discarded.",
+                L"AlarmClock", MB_OKCANCEL | MB_ICONWARNING) != IDOK)
             return;
-        }
-        if (PtInRect(&editR, (POINT){mx, my})) {
-            AlarmEditData data;
-            data.hour = g_state.alarms[i].hour;
-            data.minute = g_state.alarms[i].minute;
-            data.enabled = g_state.alarms[i].enabled;
-            data.repeat_days = g_state.alarms[i].repeat_days;
-            lstrcpyW(data.label, g_state.alarms[i].label);
-            if (DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_ALARM),
-                                hwnd, alarm_dlg_proc, (LPARAM)&data) == IDOK) {
-                g_state.alarms[i].hour = data.hour;
-                g_state.alarms[i].minute = data.minute;
-                g_state.alarms[i].enabled = data.enabled;
-                g_state.alarms[i].repeat_days = data.repeat_days;
-                lstrcpyW(g_state.alarms[i].label, data.label);
-                settings_save(&g_state);
-                InvalidateRect(hwnd, NULL, FALSE);
-            }
-            return;
-        }
-        if (PtInRect(&clrR, (POINT){mx, my})) {
-            if (g_state.alarms[i].hour != ALARM_UNSET) {
-                if (MessageBoxW(hwnd,
-                        L"Clear this alarm?\n\nIts time, label and repeat days "
-                        L"will be discarded.",
-                        L"AlarmClock", MB_OKCANCEL | MB_ICONWARNING) != IDOK)
-                    return;
-            }
-            g_state.alarms[i].hour = ALARM_UNSET;
-            g_state.alarms[i].minute = ALARM_UNSET;
-            g_state.alarms[i].enabled = FALSE;
-            g_state.alarms[i].repeat_days = 0;
-            g_state.alarms[i].label[0] = 0;
+    }
+    g_state.alarms[i].hour        = ALARM_UNSET;
+    g_state.alarms[i].minute      = ALARM_UNSET;
+    g_state.alarms[i].enabled     = FALSE;
+    g_state.alarms[i].repeat_days = 0;
+    g_state.alarms[i].label[0]    = 0;
+    settings_save(&g_state);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void perform_hit(HWND hwnd, const HitTarget *t) {
+    switch (t->kind) {
+    case HT_MODE:
+        mode_action(hwnd, (ModeButtonId)t->index);
+        break;
+    case HT_SETTINGS:
+        SendMessageW(hwnd, WM_COMMAND, IDM_SETTINGS, 0);
+        break;
+    case HT_COLLAPSE:
+        toggle_alarm_panel(hwnd);
+        break;
+    case HT_ALARM_CHECK:
+        if (g_state.alarms[t->index].hour != ALARM_UNSET) {
+            g_state.alarms[t->index].enabled = !g_state.alarms[t->index].enabled;
             settings_save(&g_state);
             InvalidateRect(hwnd, NULL, FALSE);
-            return;
         }
+        break;
+    case HT_ALARM_EDIT:
+        edit_alarm(hwnd, t->index);
+        break;
+    case HT_ALARM_CLEAR:
+        clear_alarm(hwnd, t->index);
+        break;
+    default:
+        break;
+    }
+}
+
+static void on_lbuttondown(HWND hwnd, LPARAM lp) {
+    HitTarget t;
+    if (!hit_test(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), &t)) return;
+
+    g_pressed   = t;
+    g_pressedIn = TRUE;
+    SetCapture(hwnd);
+    InvalidateRect(hwnd, NULL, FALSE);
+}
+
+static void on_lbuttonup(HWND hwnd, LPARAM lp) {
+    if (g_pressed.kind == HT_NONE) return;
+
+    HitTarget pressed = g_pressed;
+    BOOL inside = g_pressedIn;
+
+    g_pressed.kind = HT_NONE;
+    g_pressedIn    = FALSE;
+    if (GetCapture() == hwnd) ReleaseCapture();
+    InvalidateRect(hwnd, NULL, FALSE);
+
+    if (!inside) return;
+
+    /* Re-test: the layout can shift under the cursor while the button is held. */
+    HitTarget now;
+    if (hit_test(hwnd, GET_X_LPARAM(lp), GET_Y_LPARAM(lp), &now) &&
+        now.kind == pressed.kind && now.index == pressed.index) {
+        perform_hit(hwnd, &pressed);
+    }
+}
+
+static void on_mousemove(HWND hwnd, LPARAM lp) {
+    int mx = GET_X_LPARAM(lp), my = GET_Y_LPARAM(lp);
+
+    if (!g_tracking) {
+        TRACKMOUSEEVENT tme;
+        tme.cbSize      = sizeof(tme);
+        tme.dwFlags     = TME_LEAVE;
+        tme.hwndTrack   = hwnd;
+        tme.dwHoverTime = 0;
+        if (TrackMouseEvent(&tme)) g_tracking = TRUE;
+    }
+
+    if (g_pressed.kind != HT_NONE) {
+        POINT pt = { mx, my };
+        BOOL in = PtInRect(&g_pressed.rect, pt);
+        if (in != g_pressedIn) {
+            g_pressedIn = in;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return;
+    }
+
+    HitTarget t;
+    hit_test(hwnd, mx, my, &t);
+    if (t.kind != g_hover.kind || t.index != g_hover.index) {
+        g_hover = t;
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+}
+
+static void on_mouseleave(HWND hwnd) {
+    g_tracking = FALSE;
+    if (g_hover.kind != HT_NONE) {
+        g_hover.kind = HT_NONE;
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+}
+
+static void on_keydown(HWND hwnd, WPARAM key) {
+    AppState *s = &g_state;
+    switch (key) {
+    case VK_ESCAPE:
+        /* The one that has to work half asleep. */
+        if (s->alarm_active || s->snooze_pending) dismiss_alarm();
+        break;
+    case VK_SPACE:
+    case VK_RETURN:
+        if (s->alarm_active) snooze_alarm();
+        break;
+    case 'S':
+        if (!s->alarm_active) SendMessageW(hwnd, WM_COMMAND, IDM_SETTINGS, 0);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Rebuilding the fonts and the clock area was duplicated between WM_CREATE and
+   WM_SIZE, and neither rebuilt the GUI font - so a dpi change left the panel
+   text at its old size. One routine now serves create, resize and
+   WM_DPICHANGED. */
+static void rebuild_fonts(HWND hwnd) {
+    AppState *s = &g_state;
+
+    if (s->hClockFont) { DeleteObject(s->hClockFont); s->hClockFont = NULL; }
+    if (s->hDateFont)  { DeleteObject(s->hDateFont);  s->hDateFont  = NULL; }
+    if (s->hGuiFont)   { DeleteObject(s->hGuiFont);   s->hGuiFont   = NULL; }
+
+    s->hClockFont = create_fitted_clock_font(hwnd, s->clockFaceName);
+
+    HDC hdc = GetDC(hwnd);
+    TEXTMETRICW tmClock, tmDate;
+    HFONT hOld = (HFONT)SelectObject(hdc, s->hClockFont);
+    GetTextMetricsW(hdc, &tmClock);
+    int dateH = tmClock.tmHeight / 6;
+    if (dateH < S(18)) dateH = S(18);
+    SelectObject(hdc, hOld);
+    ReleaseDC(hwnd, hdc);
+
+    s->hDateFont = CreateFontW(dateH,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+
+    hdc = GetDC(hwnd);
+    hOld = (HFONT)SelectObject(hdc, s->hClockFont);
+    GetTextMetricsW(hdc, &tmClock);
+    SelectObject(hdc, s->hDateFont);
+    GetTextMetricsW(hdc, &tmDate);
+    SelectObject(hdc, hOld);
+    ReleaseDC(hwnd, hdc);
+
+    s->hGuiFont = CreateFontW(S(16),0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+
+    RECT cr;
+    GetClientRect(hwnd, &cr);
+    if (s->clock_style == CLOCK_ANALOG) {
+        int box = (cr.right - cr.left) - S(SEP_MARGIN) * 2;
+        s->clockAreaH = clamp_clock_area(hwnd, box + S(10));
+    } else {
+        int gap = tmClock.tmHeight / 10;
+        s->clockAreaH = clamp_clock_area(hwnd,
+            tmClock.tmHeight + gap + tmDate.tmHeight + S(6 + 34));
     }
 }
 
 static LRESULT on_create(HWND hwnd) {
     AppState *s = &g_state;
     s->hMainWnd = hwnd;
+    s->dpi = window_dpi(hwnd);
     theme_update_colors(s);
 
     lstrcpyW(s->clockFaceName, L"Consolas");
@@ -770,39 +1023,7 @@ static LRESULT on_create(HWND hwnd) {
         }
     }
 
-    s->hClockFont = create_fitted_clock_font(hwnd, s->clockFaceName);
-
-    HDC hdc = GetDC(hwnd);
-    TEXTMETRICW tmClock;
-    HFONT hOld = (HFONT)SelectObject(hdc, s->hClockFont);
-    GetTextMetricsW(hdc, &tmClock);
-    int dateH = tmClock.tmHeight / 6;
-    if (dateH < 18) dateH = 18;
-    SelectObject(hdc, hOld);
-    ReleaseDC(hwnd, hdc);
-
-    s->hDateFont = CreateFontW(dateH,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
-
-    hdc = GetDC(hwnd);
-    hOld = (HFONT)SelectObject(hdc, s->hClockFont);
-    GetTextMetricsW(hdc, &tmClock);
-    TEXTMETRICW tmDate;
-    SelectObject(hdc, s->hDateFont);
-    GetTextMetricsW(hdc, &tmDate);
-    SelectObject(hdc, hOld);
-    ReleaseDC(hwnd, hdc);
-
-    if (s->clock_style == CLOCK_ANALOG) {
-        RECT cr; GetClientRect(hwnd, &cr);
-        int box = (cr.right - cr.left) - SEP_MARGIN*2;
-        s->clockAreaH = clamp_clock_area(hwnd, box + 10);
-    } else {
-        int gap = tmClock.tmHeight / 10;
-        s->clockAreaH = clamp_clock_area(hwnd,
-            tmClock.tmHeight + gap + tmDate.tmHeight + 6 + 34);
-    }
-
-    s->hGuiFont = CreateFontW(16,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
+    rebuild_fonts(hwnd);
 
     theme_apply(hwnd, s->dark_mode);
     tray_create(hwnd, s);
@@ -935,45 +1156,15 @@ static void on_size(HWND hwnd, WPARAM wp) {
     if (s->hMainWnd != hwnd) return;
 
     RECT cr; GetClientRect(hwnd, &cr);
-    int availW = cr.right - cr.left - SEP_MARGIN*2 - 8;
-    if (availW < 40) return;
+    int availW = cr.right - cr.left - S(SEP_MARGIN)*2 - S(8);
+    if (availW < S(40)) return;
 
     static int lastW = 0, lastH = 0;
     if (cr.right - cr.left == lastW && cr.bottom - cr.top == lastH) return;
     lastW = cr.right - cr.left;
     lastH = cr.bottom - cr.top;
 
-    if (s->hClockFont) { DeleteObject(s->hClockFont); s->hClockFont = NULL; }
-    if (s->hDateFont)  { DeleteObject(s->hDateFont);  s->hDateFont  = NULL; }
-
-    s->hClockFont = create_fitted_clock_font(hwnd, s->clockFaceName);
-
-    TEXTMETRICW tm;
-    HDC hdc = GetDC(hwnd);
-    HFONT hOld = (HFONT)SelectObject(hdc, s->hClockFont);
-    GetTextMetricsW(hdc, &tm);
-    int dateH = tm.tmHeight / 6;
-    if (dateH < 18) dateH = 18;
-    SelectObject(hdc, hOld); ReleaseDC(hwnd, hdc);
-
-    s->hDateFont = CreateFontW(dateH,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,OUT_DEFAULT_PRECIS,CLIP_DEFAULT_PRECIS,CLEARTYPE_QUALITY,DEFAULT_PITCH|FF_DONTCARE,L"Segoe UI");
-
-    hdc = GetDC(hwnd);
-    hOld = (HFONT)SelectObject(hdc, s->hClockFont);
-    GetTextMetricsW(hdc, &tm);
-    TEXTMETRICW tmDate;
-    SelectObject(hdc, s->hDateFont); GetTextMetricsW(hdc, &tmDate);
-    SelectObject(hdc, hOld); ReleaseDC(hwnd, hdc);
-
-    if (s->clock_style == CLOCK_ANALOG) {
-        int box = (cr.right - cr.left) - SEP_MARGIN*2;
-        s->clockAreaH = clamp_clock_area(hwnd, box + 10);
-    } else {
-        int gap = tm.tmHeight / 10;
-        s->clockAreaH = clamp_clock_area(hwnd,
-            tm.tmHeight + gap + tmDate.tmHeight + 6 + 34);
-    }
-
+    rebuild_fonts(hwnd);
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
@@ -1009,10 +1200,45 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_PAINT: on_paint(hwnd); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_TIMER: if (wp == TIMER_CLOCK) on_timer(hwnd); return 0;
-    case WM_GETMINMAXINFO: { MINMAXINFO *mmi = (MINMAXINFO *)lp; mmi->ptMinTrackSize.x=400; mmi->ptMinTrackSize.y=340; return 0; }
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *mmi = (MINMAXINFO *)lp;
+        mmi->ptMinTrackSize.x = S(400);
+        mmi->ptMinTrackSize.y = S(340);
+        return 0;
+    }
+    case WM_DPICHANGED: {
+        /* Moving between monitors of different scaling. Take the size Windows
+           suggests, then rebuild every font against the new dpi. */
+        g_state.dpi = (int)HIWORD(wp);
+        RECT *sug = (RECT *)lp;
+        SetWindowPos(hwnd, NULL, sug->left, sug->top,
+                     sug->right - sug->left, sug->bottom - sug->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        rebuild_fonts(hwnd);
+        InvalidateRect(hwnd, NULL, TRUE);
+        return 0;
+    }
     case WM_SIZE: on_size(hwnd, wp); return 0;
     case WM_COMMAND: on_command(hwnd, wp); return 0;
     case WM_LBUTTONDOWN: on_lbuttondown(hwnd, lp); return 0;
+    case WM_LBUTTONUP:   on_lbuttonup(hwnd, lp);   return 0;
+    case WM_MOUSEMOVE:   on_mousemove(hwnd, lp);   return 0;
+    case WM_MOUSELEAVE:  on_mouseleave(hwnd);      return 0;
+    case WM_CAPTURECHANGED:
+        if (g_pressed.kind != HT_NONE) {
+            g_pressed.kind = HT_NONE;
+            g_pressedIn = FALSE;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
+    case WM_KEYDOWN: on_keydown(hwnd, wp); return 0;
+    case WM_SETCURSOR:
+        /* What is interactive should look interactive. */
+        if (LOWORD(lp) == HTCLIENT && g_hover.kind != HT_NONE) {
+            SetCursor(LoadCursorW(NULL, IDC_HAND));
+            return TRUE;
+        }
+        break;
     case WM_CLOSE:
         AnimateWindow(hwnd, 200, AW_HIDE | AW_BLEND);
         ShowWindow(hwnd, SW_HIDE); return 0;
