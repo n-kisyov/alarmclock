@@ -143,18 +143,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     g_state.hMainWnd = hwnd;
 
-    HMENU hMenu = CreateMenu();
-    HMENU hFile = CreatePopupMenu();
-    AppendMenuW(hFile, MF_STRING, IDM_SETTINGS, L"Settings");
-    AppendMenuW(hFile, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(hFile, MF_STRING, IDM_EXIT, L"Exit");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hFile, L"File");
-
-    HMENU hHelp = CreatePopupMenu();
-    AppendMenuW(hHelp, MF_STRING, IDM_ABOUT, L"About");
-    AppendMenuW(hMenu, MF_POPUP, (UINT_PTR)hHelp, L"Help");
-
-    SetMenu(hwnd, hMenu);
+    /* No menu bar: Windows draws it in the system light colours regardless of
+       the dark theme applied to the rest of the window, and darkening a menu
+       BAR (as opposed to its popups) needs undocumented messages. Settings is
+       a themed button in the alarm panel header instead, and the tray menu
+       carries Settings, About and Exit.  */
 
     if (!g_state.start_minimized) {
         ShowWindow(hwnd, nCmdShow);

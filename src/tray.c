@@ -64,6 +64,9 @@ void tray_show_menu(HWND hwnd, AppState *s) {
     HMENU hMenu = CreatePopupMenu();
     AppendMenuW(hMenu, MF_STRING, IDM_TRAY_SHOW, L"Show");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(hMenu, MF_STRING, IDM_SETTINGS, L"Settings");
+    AppendMenuW(hMenu, MF_STRING, IDM_ABOUT, L"About");
+    AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
     AppendMenuW(hMenu, MF_STRING, IDM_TRAY_EXIT, L"Exit");
 
     POINT pt;

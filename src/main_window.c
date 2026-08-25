@@ -8,6 +8,7 @@
 #include "clock_renderer.h"
 #include "sound.h"
 #include "settings_data.h"
+#include <strsafe.h>
 
 #define ALARM_PAD_X      10
 #define ALARM_PAD_Y      8
@@ -115,18 +116,30 @@ static RECT get_check_rect(const RECT *alarmRow) {
     r.right = r.left + ALARM_CHK_SIZE; r.bottom = r.top + ALARM_CHK_SIZE;
     return r;
 }
-static RECT get_edit_rect(const RECT *alarmRow) {
+/* Clear is furthest from the alarm it destroys, and Edit - the one you
+   actually want most of the time - reads first. */
+static RECT get_clear_rect(const RECT *alarmRow) {
     RECT r;
     r.right = alarmRow->right - 8; r.left = r.right - ALARM_BTN_W;
     r.top = alarmRow->top + (ALARM_ROW_H - ALARM_BTN_H) / 2;
     r.bottom = r.top + ALARM_BTN_H;
     return r;
 }
-static RECT get_clear_rect(const RECT *alarmRow) {
-    RECT edit = get_edit_rect(alarmRow);
+static RECT get_edit_rect(const RECT *alarmRow) {
+    RECT clear = get_clear_rect(alarmRow);
     RECT r;
-    r.right = edit.left - ALARM_BTN_GAP; r.left = r.right - ALARM_BTN_W + 4;
-    r.top = edit.top; r.bottom = edit.bottom;
+    r.right = clear.left - ALARM_BTN_GAP; r.left = r.right - ALARM_BTN_W;
+    r.top = clear.top; r.bottom = clear.bottom;
+    return r;
+}
+
+/* Settings moved off the menu bar and into the panel header. */
+static RECT get_settings_rect(const RECT *header) {
+    RECT r;
+    r.right  = header->right - 26;
+    r.left   = r.right - 62;
+    r.top    = header->top;
+    r.bottom = header->top + ALARM_HEADER_H;
     return r;
 }
 
@@ -172,9 +185,19 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
     SetTextColor(hdc, s->textColor);
     HFONT hOldFont = (HFONT)SelectObject(hdc, s->hGuiFont);
 
+    RECT settingsR = get_settings_rect(&header);
+
     RECT hdr = header;
-    hdr.right -= 26;
+    hdr.right = settingsR.left - 8;
     DrawText(hdc, L"Alarms", -1, &hdr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, hOldFont);
+
+    draw_button(hdc, &settingsR, L"Settings",
+                s->dark_mode ? RGB(0x45,0x45,0x45) : RGB(0xE0,0xE0,0xE0), s->textColor);
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, s->textColor);
+    SelectObject(hdc, s->hGuiFont);
 
     WCHAR *arrow = s->alarms_collapsed ? L"\x25B6" : L"\x25BC";
     hdr = header;
@@ -216,22 +239,26 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         TCHAR timeStr[64];
         if (s->alarms[i].hour >= 0 && s->alarms[i].minute >= 0) {
             int h = s->alarms[i].hour;
-            WCHAR ap[4] = L"";
+            const WCHAR *ap = L"";
             if (!s->hour24) {
-                ap[0] = (h >= 12) ? L'P' : L'A'; ap[1] = L'M';
+                ap = (h >= 12) ? L" PM" : L" AM";
                 if (h == 0) h = 12; else if (h > 12) h -= 12;
             }
+            /* The suffix carries its own leading space, so 24-hour rows no
+               longer render with a double space and a trailing one. */
             if (s->alarms[i].label[0])
-                wsprintf(timeStr, L"%02d:%02d %s %s", h, s->alarms[i].minute, ap, s->alarms[i].label);
+                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s  %s",
+                                 h, s->alarms[i].minute, ap, s->alarms[i].label);
             else
-                wsprintf(timeStr, L"%02d:%02d %s", h, s->alarms[i].minute, ap);
+                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s",
+                                 h, s->alarms[i].minute, ap);
         } else {
             lstrcpy(timeStr, L"--:--");
         }
 
         RECT timeR;
         timeR.left = chkR.right + 8; timeR.top = rowR.top + 4;
-        timeR.right = clrR.left - 8; timeR.bottom = rowR.bottom - 4;
+        timeR.right = editR.left - 8; timeR.bottom = rowR.bottom - 4;
 
         SetBkMode(hdc, TRANSPARENT); SetTextColor(hdc, s->textColor);
         HFONT hRowFont = (HFONT)SelectObject(hdc, s->hGuiFont);
@@ -613,12 +640,12 @@ static void on_paint(HWND hwnd) {
     draw_mode_bar(hdcMem, &clockRect);
     draw_alarm_panel(hdcMem, hwnd, &clockRect);
 
-    if (g_state.acrylic) {
-        BLENDFUNCTION bf = { AC_SRC_OVER, 0, 220, 0 };
-        AlphaBlend(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, cw, ch, bf);
-    } else {
-        BitBlt(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, SRCCOPY);
-    }
+    /* Always an opaque blit. The acrylic setting used to AlphaBlend this frame
+       at 220/255 over whatever was already in the window DC - and since
+       WM_ERASEBKGND returns 1, that was the previous frame, not the DWM
+       backdrop. It composited against stale pixels and left ghosting. The
+       setting now drives only DWMWA_SYSTEMBACKDROP_TYPE, in theme_apply. */
+    BitBlt(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, SRCCOPY);
 
     SelectObject(hdcMem, hOldBmp);
     DeleteObject(hBmp); DeleteDC(hdcMem);
@@ -635,6 +662,12 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
 
     RECT panel, header;
     calc_alarm_rects(hwnd, &panel, &header, &clockRect);
+
+    RECT settingsR = get_settings_rect(&header);
+    if (PtInRect(&settingsR, (POINT){mx, my})) {
+        SendMessageW(hwnd, WM_COMMAND, IDM_SETTINGS, 0);
+        return;
+    }
 
     /* Collapse arrow hit test */
     RECT arrowR = header;
@@ -698,6 +731,13 @@ static void on_lbuttondown(HWND hwnd, LPARAM lp) {
             return;
         }
         if (PtInRect(&clrR, (POINT){mx, my})) {
+            if (g_state.alarms[i].hour != ALARM_UNSET) {
+                if (MessageBoxW(hwnd,
+                        L"Clear this alarm?\n\nIts time, label and repeat days "
+                        L"will be discarded.",
+                        L"AlarmClock", MB_OKCANCEL | MB_ICONWARNING) != IDOK)
+                    return;
+            }
             g_state.alarms[i].hour = ALARM_UNSET;
             g_state.alarms[i].minute = ALARM_UNSET;
             g_state.alarms[i].enabled = FALSE;
