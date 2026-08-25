@@ -46,6 +46,8 @@ typedef struct {
 
     BOOL     alarm_active;
     int      last_fire_min;
+    ULONGLONG alarm_started_ms;  /* for the maximum ring duration */
+    int      auto_snooze_count;
 
     BOOL     snooze_pending;
     ULONGLONG snooze_end_ms;

@@ -358,6 +358,7 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
 static void snooze_alarm(void);
 static void dismiss_alarm(void);
 static void show_and_focus(HWND hwnd);
+static UINT timer_interval(const AppState *s);
 
 /* ---------- mode action bar ----------
 
@@ -597,6 +598,7 @@ static void dismiss_alarm(void) {
     AppState *s = &g_state;
     s->alarm_active = FALSE;
     s->snooze_pending = FALSE;
+    s->auto_snooze_count = 0;
     sound_stop_alarm(s);
     InvalidateRect(s->hMainWnd, NULL, FALSE);
 }
@@ -656,15 +658,48 @@ INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
 /* ---------- paint ---------- */
 
+/* The back buffer was allocated and thrown away on every paint, twenty times a
+   second. It is kept between frames now and only rebuilt when the size
+   changes. */
+static HDC     g_memDC     = NULL;
+static HBITMAP g_memBmp    = NULL;
+static HBITMAP g_memOldBmp = NULL;
+static int     g_memW = 0, g_memH = 0;
+
+static void free_backbuffer(void) {
+    if (!g_memDC) return;
+    SelectObject(g_memDC, g_memOldBmp);
+    DeleteObject(g_memBmp);
+    DeleteDC(g_memDC);
+    g_memDC = NULL; g_memBmp = NULL; g_memOldBmp = NULL;
+    g_memW = g_memH = 0;
+}
+
+static BOOL ensure_backbuffer(HDC hdcScreen, int w, int h) {
+    if (g_memDC && g_memW == w && g_memH == h) return TRUE;
+    free_backbuffer();
+
+    g_memDC = CreateCompatibleDC(hdcScreen);
+    if (!g_memDC) return FALSE;
+    g_memBmp = CreateCompatibleBitmap(hdcScreen, w, h);
+    if (!g_memBmp) { DeleteDC(g_memDC); g_memDC = NULL; return FALSE; }
+
+    g_memOldBmp = (HBITMAP)SelectObject(g_memDC, g_memBmp);
+    g_memW = w; g_memH = h;
+    return TRUE;
+}
+
 static void on_paint(HWND hwnd) {
     PAINTSTRUCT ps;
     HDC hdcScreen = BeginPaint(hwnd, &ps);
     RECT cr; GetClientRect(hwnd, &cr);
     int cw = cr.right - cr.left, ch = cr.bottom - cr.top;
 
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    HBITMAP hBmp = CreateCompatibleBitmap(hdcScreen, cw, ch);
-    HBITMAP hOldBmp = (HBITMAP)SelectObject(hdcMem, hBmp);
+    if (cw <= 0 || ch <= 0 || !ensure_backbuffer(hdcScreen, cw, ch)) {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+    HDC hdcMem = g_memDC;
 
     HBRUSH hBgBr = CreateSolidBrush(g_state.bgColor);
     FillRect(hdcMem, &cr, hBgBr);
@@ -715,9 +750,6 @@ static void on_paint(HWND hwnd) {
        backdrop. It composited against stale pixels and left ghosting. The
        setting now drives only DWMWA_SYSTEMBACKDROP_TYPE, in theme_apply. */
     BitBlt(hdcScreen, cr.left, cr.top, cw, ch, hdcMem, 0, 0, SRCCOPY);
-
-    SelectObject(hdcMem, hOldBmp);
-    DeleteObject(hBmp); DeleteDC(hdcMem);
     EndPaint(hwnd, &ps);
 }
 
@@ -1027,7 +1059,7 @@ static LRESULT on_create(HWND hwnd) {
 
     theme_apply(hwnd, s->dark_mode);
     tray_create(hwnd, s);
-    SetTimer(hwnd, TIMER_CLOCK, 50, NULL);
+    SetTimer(hwnd, TIMER_CLOCK, timer_interval(s), NULL);
     return 0;
 }
 
@@ -1067,6 +1099,34 @@ static void show_and_focus(HWND hwnd) {
     SetForegroundWindow(hwnd);
 }
 
+/* An alarm nobody is home for used to ring until the machine slept. */
+#define ALARM_MAX_RING_MS     (5 * 60 * 1000)
+#define ALARM_MAX_AUTO_SNOOZE 3
+
+/* A digital clock changes once a second and does not need a 20Hz repaint of the
+   whole window; the analog sweep hand and the stopwatch centiseconds do. */
+static UINT timer_interval(const AppState *s) {
+    if (s->app_mode == APP_MODE_STOPWATCH) return 50;
+    if (s->alarm_active)                   return 250;
+    if (s->app_mode == APP_MODE_COUNTDOWN) return 200;
+    if (s->snooze_pending)                 return 250;
+    return (s->clock_style == CLOCK_ANALOG) ? 50 : 250;
+}
+
+static void update_timer_interval(HWND hwnd) {
+    static UINT current = 0;
+    UINT want = timer_interval(&g_state);
+    if (want == current) return;
+    current = want;
+    SetTimer(hwnd, TIMER_CLOCK, want, NULL);
+}
+
+static void begin_alarm(AppState *s, BOOL fresh) {
+    s->alarm_active     = TRUE;
+    s->alarm_started_ms = GetTickCount64();
+    if (fresh) s->auto_snooze_count = 0;
+}
+
 /* Runs off the timer, not the paint, so the countdown keeps running - and still
    fires - while the window is hidden in the tray or minimized. */
 static void tick_countdown(void) {
@@ -1081,7 +1141,7 @@ static void tick_countdown(void) {
         s->cd_remaining_ms = 0;
         s->cd_running = FALSE;
         if (!s->alarm_active) {
-            s->alarm_active = TRUE;
+            begin_alarm(s, TRUE);
             sound_play_alarm(s);
             /* Bring the window up like a scheduled alarm does, so there is
                something to press Dismiss on. */
@@ -1119,6 +1179,7 @@ static void on_timer(HWND hwnd) {
     SYSTEMTIME st;
     GetLocalTime(&st);
     static int lastAlarmSec = -1;
+    static int lastPaintedSec = -1;
 
     tick_countdown();
 
@@ -1130,6 +1191,7 @@ static void on_timer(HWND hwnd) {
                always see a visible window and never notify. */
             BOOL wasInBackground = IsIconic(hwnd) || !IsWindowVisible(hwnd);
 
+            begin_alarm(s, TRUE);
             sound_play_alarm(s);
             show_and_focus(hwnd);
 
@@ -1138,7 +1200,7 @@ static void on_timer(HWND hwnd) {
 
         if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
             s->snooze_pending = FALSE;
-            s->alarm_active = TRUE;
+            begin_alarm(s, FALSE);
             s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
             sound_play_alarm(s);
             show_and_focus(hwnd);
@@ -1147,7 +1209,33 @@ static void on_timer(HWND hwnd) {
         tray_update_tooltip(s);
     }
 
-    InvalidateRect(hwnd, NULL, FALSE);
+    /* Cap how long an alarm can ring unattended: snooze it a few times, then
+       give up rather than sounding forever in an empty house. */
+    if (s->alarm_active && s->alarm_started_ms &&
+        GetTickCount64() - s->alarm_started_ms > ALARM_MAX_RING_MS) {
+        if (s->auto_snooze_count < ALARM_MAX_AUTO_SNOOZE) {
+            int keep = s->auto_snooze_count + 1;
+            snooze_alarm();
+            s->auto_snooze_count = keep;
+        } else {
+            dismiss_alarm();
+        }
+    }
+
+    update_timer_interval(hwnd);
+
+    /* Only repaint when something on screen has actually moved. A digital clock
+       changes once a second; it used to redraw the whole window at 20Hz. */
+    BOOL secondChanged = ((int)st.wSecond != lastPaintedSec);
+    BOOL animating = s->alarm_active || s->snooze_pending ||
+                     s->app_mode == APP_MODE_STOPWATCH ||
+                     s->cd_running ||
+                     (s->app_mode == APP_MODE_CLOCK && s->clock_style == CLOCK_ANALOG);
+
+    if (secondChanged || animating) {
+        lastPaintedSec = (int)st.wSecond;
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
 }
 
 static void on_size(HWND hwnd, WPARAM wp) {
@@ -1189,6 +1277,7 @@ static void on_destroy(HWND hwnd) {
     if (s->hGuiFont)   DeleteObject(s->hGuiFont);
     if (s->hBgBrush)   DeleteObject(s->hBgBrush);
     if (s->hPanelBrush)DeleteObject(s->hPanelBrush);
+    free_backbuffer();
 
     clock_cleanup();
     PostQuitMessage(0);

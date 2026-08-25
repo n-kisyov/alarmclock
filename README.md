@@ -21,9 +21,18 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 
 The build script uses `gcc` from `C:\msys64\ucrt64\bin`, compiles all `.c` sources, links resources with `windres`, and produces `alarmclock.exe`.
 
+Builds are incremental: a source is recompiled only when it or a header is
+newer than its object file.
+
 ```powershell
-# Clean rebuild
+# Remove obj/ and the executable
 powershell -ExecutionPolicy Bypass -File build.ps1 -Clean
+
+# Force every file to recompile
+powershell -ExecutionPolicy Bypass -File build.ps1 -Rebuild
+
+# Build, then run the settings round-trip tests
+powershell -ExecutionPolicy Bypass -File build.ps1 -Test
 ```
 
 ## Features
@@ -31,12 +40,13 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Clean
 ### Clock
 
 - **Digital display** — auto-fitted clock font (embedded Digital-7 Mono), dynamically sized to the window width
-- **Analog display** — GDI+ anti-aliased rendering with smooth-sweep second hand (sub-millisecond precision via `GetSystemTimePreciseAsFileTime`), 60 tick marks, hour numbers, rounded hand caps
+- **Analog display** — GDI+ anti-aliased rendering with smooth-sweep second hand (sub-millisecond precision via `GetSystemTimePreciseAsFileTime`, converted to local time), 60 tick marks, hour numbers, AM/PM marker, rounded hand caps
 - **12/24-hour mode** with AM/PM indicator
-- **Acrylic backdrop** — Windows 11 blur/glass effect behind the window (toggleable)
+- **Acrylic backdrop** — sets the Windows 11 DWM backdrop type on the window frame (toggleable). The client area is painted opaque, so this affects the frame rather than showing through the clock.
 - **Light/dark theme** — DWM immersive dark mode, custom color palettes for all controls and dialogs
 - **Always on top** — optional flag to keep the clock above other windows
-- **Double-buffered rendering** — flicker-free display
+- **Double-buffered rendering** — flicker-free display, with the back buffer kept between frames
+- **Paced repainting** — the redraw rate follows what is on screen: once a second for the digital clock, 20fps only for the analog sweep hand and the stopwatch
 
 ### Timer / Stopwatch
 
@@ -51,6 +61,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Clean
 - **Inline alarm panel** in the main window — toggle checkbox to enable/disable each alarm, Edit/Clear buttons, time + label display
 - **Collapsible panel** — click the ▼/▶ arrow to expand or collapse the alarm area; window auto-resizes
 - **Snooze** — configurable delay (1-30 min) with on-screen countdown and cancel button
+- **Ring limit** — an unattended alarm auto-snoozes after 5 minutes, up to 3 times, then stops rather than sounding indefinitely
 - **Repeat modes** — once, daily, or per-day bitmask
 
 ### Sound
@@ -63,15 +74,24 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Clean
 ### System tray
 
 - **Minimize to tray** on close (fade animation)
-- **Tray icon** with right-click menu (Show / Exit)
+- **Tray icon** with right-click menu (Show / Settings / About / Exit)
 - **Tooltip** shows next upcoming alarm
 - **Balloon notification** on alarm trigger when window is hidden
 - **Start minimized** option — launch directly to the tray
 - **Start with Windows** — optional registry autorun entry
 
+### Keyboard
+
+| Key | Action |
+|---|---|
+| `Esc` | Dismiss a ringing alarm, or cancel a pending snooze |
+| `Space` / `Enter` | Snooze a ringing alarm |
+| `S` | Open Settings |
+
 ### Settings
 
-All options are persisted to `alarmclock_settings.json` (UTF-8) next to the executable:
+Reached from the **Settings** button in the alarm panel header, or from the tray
+menu. All options are persisted to `alarmclock_settings.json` (UTF-8) next to the executable:
 
 | Setting | Description |
 |---|---|
@@ -88,7 +108,11 @@ All options are persisted to `alarmclock_settings.json` (UTF-8) next to the exec
 | Start with Windows | Registry Run key |
 | Always on Top | Keep window above others |
 | Start minimized | Launch hidden in tray |
-| Window position/size | Restored on next launch |
+| Window position/size | Restored on next launch, and re-centred if the saved monitor is gone |
+
+Settings are written to a temporary file and swapped into place, leaving the
+previous copy as `alarmclock_settings.json.bak`. If the main file cannot be
+parsed, the backup is loaded instead.
 
 ## Source structure
 
@@ -108,6 +132,8 @@ src/
   tray.c / .h         System tray icon, tooltip, balloon
   settings_data.c/.h  JSON load/save bridge
   json_utils.c / .h   UTF-8 JSON reader/writer
+tests/
+  test_settings.c     Console harness over the settings round trip
 resources/
   app.rc              Resource script (manifest, icon, font, dialogs)
   app.manifest        Common Controls v6 + PerMonitorV2 DPI

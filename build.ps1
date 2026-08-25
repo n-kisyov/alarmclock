@@ -1,5 +1,7 @@
 param (
-    [switch]$Clean
+    [switch]$Clean,
+    [switch]$Test,
+    [switch]$Rebuild
 )
 
 $ErrorActionPreference = "Stop"
@@ -7,12 +9,12 @@ $ErrorActionPreference = "Stop"
 $ProjRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $SrcDir   = Join-Path $ProjRoot "src"
 $ResDir   = Join-Path $ProjRoot "resources"
+$TestDir  = Join-Path $ProjRoot "tests"
 $ObjDir   = Join-Path $ProjRoot "obj"
 $OutExe   = Join-Path $ProjRoot "alarmclock.exe"
 
 $MSysRoot = "C:\msys64\ucrt64"
 $GccPath  = Join-Path $MSysRoot "bin\gcc.exe"
-$GppPath  = Join-Path $MSysRoot "bin\g++.exe"
 $WrPath   = Join-Path $MSysRoot "bin\windres.exe"
 
 if ($Clean) {
@@ -38,6 +40,29 @@ if (-not (Test-Path $ObjDir)) {
     New-Item -ItemType Directory -Path $ObjDir -Force | Out-Null
 }
 
+$CFlags = @(
+    "-O2", "-Wall", "-Wextra",
+    "-DUNICODE", "-D_UNICODE",
+    "-I$SrcDir", "-I$ResDir"
+)
+
+# Any header change invalidates every object - the dependency graph is small
+# enough that tracking it per-file would cost more than it saves.
+$NewestHeader = (Get-ChildItem -Path $SrcDir -Filter *.h |
+                 Sort-Object LastWriteTimeUtc | Select-Object -Last 1).LastWriteTimeUtc
+
+function Test-Stale {
+    param([string]$Target, [string[]]$Sources)
+    if ($Rebuild) { return $true }
+    if (-not (Test-Path $Target)) { return $true }
+    $targetTime = (Get-Item $Target).LastWriteTimeUtc
+    foreach ($s in $Sources) {
+        if (-not (Test-Path $s)) { return $true }
+        if ((Get-Item $s).LastWriteTimeUtc -gt $targetTime) { return $true }
+    }
+    return $false
+}
+
 $IconFile = Join-Path $ResDir "alarmclock.ico"
 if (-not (Test-Path $IconFile)) {
     Write-Host "Generating app icon..." -ForegroundColor Cyan
@@ -50,14 +75,18 @@ if (-not (Test-Path $FontFile)) {
     Write-Host "[WARN] digital-7.ttf not found -- app will use Consolas fallback" -ForegroundColor Yellow
 }
 
-Write-Host "Compiling resources..." -ForegroundColor Cyan
 $ResObj = Join-Path $ObjDir "app_res.o"
 $RcFile = Join-Path $ResDir "app.rc"
-$ArgsWr = @("-i", $RcFile, "-o", $ResObj, "-I$ResDir", "-I$SrcDir")
-& $WrPath @ArgsWr
-if ($LASTEXITCODE -ne 0) { Write-Error "windres failed"; exit 1 }
+$ResDeps = @($RcFile, (Join-Path $SrcDir "resource.h"), $IconFile, $FontFile) |
+           Where-Object { Test-Path $_ }
 
-Write-Host "Compiling source files..." -ForegroundColor Cyan
+if (Test-Stale $ResObj $ResDeps) {
+    Write-Host "Compiling resources..." -ForegroundColor Cyan
+    & $WrPath @("-i", $RcFile, "-o", $ResObj, "-I$ResDir", "-I$SrcDir")
+    if ($LASTEXITCODE -ne 0) { Write-Error "windres failed"; exit 1 }
+} else {
+    Write-Host "Resources up to date." -ForegroundColor DarkGray
+}
 
 $Sources = @(
     "main.c",
@@ -73,31 +102,58 @@ $Sources = @(
     "sound.c"
 )
 
+Write-Host "Compiling source files..." -ForegroundColor Cyan
+
 $Objs = @()
+$Compiled = 0
 foreach ($src in $Sources) {
-    $obj = Join-Path $ObjDir ($src -replace '\.c$', '.o')
+    $obj     = Join-Path $ObjDir ($src -replace '\.c$', '.o')
     $srcFull = Join-Path $SrcDir $src
-    Write-Host "  $src" -ForegroundColor Gray
-    $ArgsGcc = @(
-        "-c", $srcFull, "-o", $obj,
-        "-mwindows", "-O2", "-Wall",
-        "-DUNICODE", "-D_UNICODE",
-        "-I$SrcDir", "-I$ResDir"
-    )
-    & $GccPath @ArgsGcc
-    if ($LASTEXITCODE -ne 0) { Write-Error "Compilation failed: $src"; exit 1 }
     $Objs += $obj
+
+    $deps = @($srcFull)
+    if ($NewestHeader) { $deps += (Get-ChildItem -Path $SrcDir -Filter *.h | ForEach-Object { $_.FullName }) }
+
+    if (-not (Test-Stale $obj $deps)) {
+        Write-Host "  $src (up to date)" -ForegroundColor DarkGray
+        continue
+    }
+
+    Write-Host "  $src" -ForegroundColor Gray
+    & $GccPath @("-c", $srcFull, "-o", $obj) @CFlags
+    if ($LASTEXITCODE -ne 0) { Write-Error "Compilation failed: $src"; exit 1 }
+    $Compiled++
 }
 
-Write-Host "Linking..." -ForegroundColor Cyan
 $LinkObjs = $Objs + $ResObj
-$ArgsLink = @(
-    "-o", $OutExe
-) + $LinkObjs + @(
-    "-mwindows", "-O2",
-    "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lmsimg32", "-lgdiplus"
-)
-& $GccPath @ArgsLink
-if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }
+if ($Compiled -gt 0 -or (Test-Stale $OutExe $LinkObjs)) {
+    Write-Host "Linking..." -ForegroundColor Cyan
+    $ArgsLink = @("-o", $OutExe) + $LinkObjs + @(
+        "-mwindows", "-O2",
+        "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lgdiplus"
+    )
+    & $GccPath @ArgsLink
+    if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }
+    Write-Host "Build successful: $OutExe" -ForegroundColor Green
+} else {
+    Write-Host "Up to date: $OutExe" -ForegroundColor Green
+}
 
-Write-Host "Build successful: $OutExe" -ForegroundColor Green
+if ($Test) {
+    # The settings load/save path and the alarm schedule are pure enough to
+    # exercise without a window.
+    Write-Host ""
+    Write-Host "Building tests..." -ForegroundColor Cyan
+    $TestExe = Join-Path $ObjDir "test_settings.exe"
+    $TestSrc = @(
+        (Join-Path $TestDir "test_settings.c"),
+        (Join-Path $SrcDir  "json_utils.c"),
+        (Join-Path $SrcDir  "settings_data.c"),
+        (Join-Path $SrcDir  "alarms.c")
+    )
+    & $GccPath (@("-o", $TestExe) + $TestSrc + $CFlags)
+    if ($LASTEXITCODE -ne 0) { Write-Error "Test build failed"; exit 1 }
+
+    & $TestExe
+    if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed"; exit 1 }
+}

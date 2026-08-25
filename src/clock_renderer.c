@@ -66,6 +66,40 @@ void     WINGDIPAPI GdiplusShutdown(ULONG_PTR);
 
 static ULONG_PTR g_gdipToken;
 
+/* The numeral font, its family and the string format do not depend on the
+   theme, only on size - and building them cost a font lookup per frame at 20
+   frames a second. Cached and rebuilt only when the dial changes size. */
+static GpFontFamily   *g_numFamily = NULL;
+static GpFont         *g_numFont   = NULL;
+static GpFont         *g_apFont    = NULL;
+static GpStringFormat *g_numFmt    = NULL;
+static int             g_numFontH  = 0;
+
+static void release_num_font_cache(void) {
+    if (g_numFmt)    { GdipDeleteStringFormat(g_numFmt);   g_numFmt = NULL; }
+    if (g_apFont)    { GdipDeleteFont(g_apFont);           g_apFont = NULL; }
+    if (g_numFont)   { GdipDeleteFont(g_numFont);          g_numFont = NULL; }
+    if (g_numFamily) { GdipDeleteFontFamily(g_numFamily);  g_numFamily = NULL; }
+    g_numFontH = 0;
+}
+
+static BOOL ensure_num_font_cache(int numH) {
+    if (g_numFont && g_numFontH == numH) return TRUE;
+    release_num_font_cache();
+
+    if (GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &g_numFamily) != Ok || !g_numFamily)
+        return FALSE;
+    GdipCreateFont(g_numFamily, (REAL)numH, FontStyleBold, UnitPixel, &g_numFont);
+    GdipCreateFont(g_numFamily, (REAL)numH * 0.62f, 0, UnitPixel, &g_apFont);
+    GdipCreateStringFormat(StringFormatFlagsNoWrap, LANG_NEUTRAL, &g_numFmt);
+    if (!g_numFont || !g_numFmt) { release_num_font_cache(); return FALSE; }
+
+    GdipSetStringFormatAlign(g_numFmt, StringAlignmentCenter);
+    GdipSetStringFormatLineAlign(g_numFmt, StringAlignmentCenter);
+    g_numFontH = numH;
+    return TRUE;
+}
+
 static ARGB colorref_to_argb(COLORREF cr) {
     return 0xFF000000 | ((ARGB)GetRValue(cr) << 16) | ((ARGB)GetGValue(cr) << 8) | (ARGB)GetBValue(cr);
 }
@@ -76,6 +110,7 @@ void clock_init(void) {
 }
 
 void clock_cleanup(void) {
+    release_num_font_cache();
     GdiplusShutdown(g_gdipToken);
 }
 
@@ -317,48 +352,39 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipDeletePen(rimPen);
     GdipDeleteBrush((GpBrush*)faceBrush);
 
-    /* Tick marks */
+    /* Tick marks. Two pens for the whole ring rather than one created and
+       destroyed per tick - this runs on every frame. */
+    GpPen *majorTick = NULL, *minorTick = NULL;
+    GdipCreatePen1(tickArgb, 3.5f, UnitPixel, &majorTick);
+    GdipCreatePen1(tickArgb, 1.0f, UnitPixel, &minorTick);
+
     int i;
     for (i = 0; i < 60; i++) {
         double a = i * M_PI / 30.0 - M_PI / 2.0;
         double ca = cos(a), sa = sin(a);
-        if (i % 5 == 0) {
-            GpPen *tickPen = NULL;
-            GdipCreatePen1(tickArgb, 3.5f, UnitPixel, &tickPen);
-            GdipDrawLine(gr, tickPen,
-                cx + (REAL)((radius - 4) * ca), cy + (REAL)((radius - 4) * sa),
-                cx + (REAL)((radius - 18) * ca), cy + (REAL)((radius - 18) * sa));
-            GdipDeletePen(tickPen);
-        } else {
-            GpPen *tickPen = NULL;
-            GdipCreatePen1(tickArgb, 1.0f, UnitPixel, &tickPen);
-            GdipDrawLine(gr, tickPen,
-                cx + (REAL)((radius - 4) * ca), cy + (REAL)((radius - 4) * sa),
-                cx + (REAL)((radius - 10) * ca), cy + (REAL)((radius - 10) * sa));
-            GdipDeletePen(tickPen);
-        }
+        BOOL major = (i % 5 == 0);
+        double inner = major ? (radius - 18) : (radius - 10);
+        GdipDrawLine(gr, major ? majorTick : minorTick,
+            cx + (REAL)((radius - 4) * ca), cy + (REAL)((radius - 4) * sa),
+            cx + (REAL)(inner * ca), cy + (REAL)(inner * sa));
     }
+
+    GdipDeletePen(majorTick);
+    GdipDeletePen(minorTick);
 
     /* Hour numbers */
     int numH = (int)radius / 8;
     if (numH < 12) numH = 12;
 
-    GpFontFamily *numFamily = NULL;
-    GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &numFamily);
-
-    GpFont *numFont = NULL;
-    GdipCreateFont(numFamily, (REAL)numH, FontStyleBold, UnitPixel, &numFont);
-
     GpSolidFill *numBrush = NULL;
     ARGB numArgb = s->dark_mode ? 0xFFF2E6CC : tickArgb;
     GdipCreateSolidFill(numArgb, &numBrush);
 
-    GpStringFormat *fmt = NULL;
-    GdipCreateStringFormat(StringFormatFlagsNoWrap, LANG_NEUTRAL, &fmt);
-    GdipSetStringFormatAlign(fmt, StringAlignmentCenter);
-    GdipSetStringFormatLineAlign(fmt, StringAlignmentCenter);
+    BOOL haveNumFont = ensure_num_font_cache(numH);
+    GpFont         *numFont = g_numFont;
+    GpStringFormat *fmt     = g_numFmt;
 
-    for (i = 1; i <= 12; i++) {
+    for (i = 1; haveNumFont && i <= 12; i++) {
         double a = i * M_PI / 6.0 - M_PI / 2.0;
         WCHAR num[4];
         wsprintfW(num, L"%d", i);
@@ -375,10 +401,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
         GdipDrawString(gr, num, lstrlenW(num), numFont, &numRect, fmt, (GpBrush*)numBrush);
     }
 
-    GdipDeleteStringFormat(fmt);
     GdipDeleteBrush((GpBrush*)numBrush);
-    GdipDeleteFont(numFont);
-    GdipDeleteFontFamily(numFamily);
 
     /* Hands */
     REAL hLen = radius * 0.50f;
@@ -410,30 +433,16 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipDeletePen(hourPen);
 
     /* AM/PM marker - a 12-hour dial alone cannot tell noon from midnight. */
-    if (!s->hour24) {
-        GpFontFamily *apFamily = NULL;
-        GdipCreateFontFamilyFromName(L"Segoe UI", NULL, &apFamily);
-        if (apFamily) {
-            GpFont *apFont = NULL;
-            GdipCreateFont(apFamily, (REAL)numH * 0.62f, 0, UnitPixel, &apFont);
-            GpSolidFill *apBrush = NULL;
-            GdipCreateSolidFill(tickArgb, &apBrush);
-            GpStringFormat *apFmt = NULL;
-            GdipCreateStringFormat(StringFormatFlagsNoWrap, LANG_NEUTRAL, &apFmt);
-            GdipSetStringFormatAlign(apFmt, StringAlignmentCenter);
-            GdipSetStringFormatLineAlign(apFmt, StringAlignmentCenter);
-
+    if (!s->hour24 && haveNumFont && g_apFont) {
+        GpSolidFill *apBrush = NULL;
+        GdipCreateSolidFill(tickArgb, &apBrush);
+        if (apBrush) {
             const WCHAR *ap = (lt.wHour >= 12) ? L"PM" : L"AM";
             REAL apW = (REAL)numH * 2.0f;
             REAL apH = (REAL)numH;
             RectF apRect = { cx - apW / 2.0f, cy + radius * 0.34f, apW, apH };
-            if (apFont && apBrush && apFmt)
-                GdipDrawString(gr, ap, 2, apFont, &apRect, apFmt, (GpBrush*)apBrush);
-
-            if (apFmt)   GdipDeleteStringFormat(apFmt);
-            if (apBrush) GdipDeleteBrush((GpBrush*)apBrush);
-            if (apFont)  GdipDeleteFont(apFont);
-            GdipDeleteFontFamily(apFamily);
+            GdipDrawString(gr, ap, 2, g_apFont, &apRect, g_numFmt, (GpBrush*)apBrush);
+            GdipDeleteBrush((GpBrush*)apBrush);
         }
     }
 
