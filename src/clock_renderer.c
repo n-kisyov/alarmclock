@@ -298,10 +298,15 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipSetSmoothingMode(gr, SmoothingModeAntiAlias);
     GdipSetTextRenderingHint(gr, TextRenderingHintAntiAlias);
 
-    ARGB faceArgb  = 0xFFFAFAFF;
-    ARGB rimArgb   = s->dark_mode ? 0xFFB4B4B9 : 0xFFA0A0A8;
-    ARGB tickArgb  = colorref_to_argb(s->textColor);
-    ARGB accentArgb = colorref_to_argb(s->accentColor);
+    /* Light mode keeps the white face. Dark mode gets a dark one, with the
+       markings and hands derived from it, rather than a white disc carrying
+       cream numerals and near-invisible ticks. */
+    ARGB faceArgb   = s->dark_mode ? 0xFF1B1F26 : 0xFFFAFAFF;
+    ARGB rimArgb    = s->dark_mode ? 0xFF5A6070 : 0xFFA0A0A8;
+    ARGB tickArgb   = s->dark_mode ? 0xFFD2D7E0 : colorref_to_argb(s->textColor);
+    ARGB accentArgb = s->dark_mode ? 0xFF4FA3E3 : colorref_to_argb(s->accentColor);
+    ARGB minArgb    = s->dark_mode ? 0xFF7FC0EA : 0xFF5BA0D0;
+    ARGB secArgb    = s->dark_mode ? 0xFFFF6B6B : 0xFFFF4040;
 
     GpSolidFill *faceBrush = NULL;
     GdipCreateSolidFill(faceArgb, &faceBrush);
@@ -345,7 +350,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipCreateFont(numFamily, (REAL)numH, FontStyleBold, UnitPixel, &numFont);
 
     GpSolidFill *numBrush = NULL;
-    ARGB numArgb = s->dark_mode ? 0xFFFFF0D8 : tickArgb;
+    ARGB numArgb = s->dark_mode ? 0xFFF2E6CC : tickArgb;
     GdipCreateSolidFill(numArgb, &numBrush);
 
     GpStringFormat *fmt = NULL;
@@ -381,7 +386,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     REAL sLen = radius * 0.82f;
 
     GpPen *secPen = NULL;
-    GdipCreatePen1(0xFFFF4040, 1.5f, UnitPixel, &secPen);
+    GdipCreatePen1(secArgb, 1.5f, UnitPixel, &secPen);
     GdipSetPenStartCap(secPen, LineCapRound);
     GdipSetPenEndCap(secPen, LineCapRound);
     GdipDrawLine(gr, secPen, cx, cy,
@@ -389,7 +394,7 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     GdipDeletePen(secPen);
 
     GpPen *minPen = NULL;
-    GdipCreatePen1(0xFF5BA0D0, 3.0f, UnitPixel, &minPen);
+    GdipCreatePen1(minArgb, 3.0f, UnitPixel, &minPen);
     GdipSetPenStartCap(minPen, LineCapRound);
     GdipSetPenEndCap(minPen, LineCapRound);
     GdipDrawLine(gr, minPen, cx, cy,
