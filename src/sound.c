@@ -2,6 +2,7 @@
 #include "main.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <strsafe.h>
 
 static TCHAR  **g_mp3_paths = NULL;
 static int     g_mp3_count  = 0;
@@ -48,7 +49,8 @@ static BOOL find_mp3_files(AppState *s) {
     free_mp3_paths();
 
     TCHAR search[MAX_PATH];
-    wsprintf(search, L"%s\\songs\\*.mp3", s->exe_dir);
+    if (FAILED(StringCchPrintfW(search, MAX_PATH, L"%s\\songs\\*.mp3", s->exe_dir)))
+        return FALSE;
 
     WIN32_FIND_DATAW fd;
     HANDLE hFind = FindFirstFileW(search, &fd);
@@ -72,7 +74,10 @@ static BOOL find_mp3_files(AppState *s) {
         return FALSE;
     }
 
+    /* Bounded by the count from the first pass: a file appearing in the songs
+       folder between the two scans would otherwise write past the allocation. */
     do {
+        if (idx >= g_mp3_count) break;
         if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
             g_mp3_paths[idx] = (TCHAR *)malloc(MAX_PATH * sizeof(TCHAR));
             if (!g_mp3_paths[idx]) {
@@ -80,11 +85,20 @@ static BOOL find_mp3_files(AppState *s) {
                 free_mp3_paths();
                 return FALSE;
             }
-            wsprintf(g_mp3_paths[idx], L"%s\\songs\\%s", s->exe_dir, fd.cFileName);
+            if (FAILED(StringCchPrintfW(g_mp3_paths[idx], MAX_PATH,
+                                        L"%s\\songs\\%s", s->exe_dir, fd.cFileName))) {
+                free(g_mp3_paths[idx]);
+                g_mp3_paths[idx] = NULL;
+                continue;   /* path too long for this entry; skip it */
+            }
             idx++;
         }
     } while (FindNextFileW(hFind, &fd));
     FindClose(hFind);
+
+    /* Fewer than the first pass counted, if a file was removed in between. */
+    g_mp3_count = idx;
+    if (g_mp3_count == 0) { free_mp3_paths(); return FALSE; }
 
     shuffle_mp3s();
     return TRUE;
@@ -105,8 +119,11 @@ static void play_mp3_next(AppState *s) {
         shuffle_mp3s();
     }
 
-    TCHAR cmd[1024];
-    wsprintf(cmd, L"open \"%s\" type mpegvideo alias alarm_mp3", g_mp3_paths[g_mp3_index]);
+    TCHAR cmd[MAX_PATH + 64];
+    if (FAILED(StringCchPrintfW(cmd, ARRAYSIZE(cmd),
+                                L"open \"%s\" type mpegvideo alias alarm_mp3",
+                                g_mp3_paths[g_mp3_index])))
+        return;
     if (mciSendStringW(cmd, NULL, 0, NULL) == 0) {
         /* Only open at the ramp floor while a crescendo is actually still
            climbing. Once it has finished, later tracks start at full volume
@@ -161,7 +178,6 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
             if (s->stop_sound) break;
             Sleep(300);
         }
-        s->stop_sound = FALSE;
         return 0;
     }
 
@@ -180,7 +196,9 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
         Beep(1200, 200); if (s->stop_sound) break;
         Sleep(500);
     }
-    s->stop_sound = FALSE;
+    /* Deliberately does not clear stop_sound: only the stopper owns that flag.
+       Clearing it here could cancel a stop aimed at the crescendo thread, or
+       one aimed at a sound that has only just started. */
     return 0;
 }
 
@@ -201,7 +219,7 @@ void sound_play_alarm(AppState *s) {
     /* Cleared here rather than in the simple-tone branch below: the MP3 branch
        returns before ever reaching that assignment, so a leftover TRUE from the
        previous stop made the crescendo and preview threads exit immediately. */
-    s->stop_sound = FALSE;
+    InterlockedExchange(&s->stop_sound, FALSE);
     g_crescendo_done = FALSE;
 
     if (s->sound_mode == SOUND_MP3) {
@@ -225,7 +243,7 @@ void sound_play_alarm(AppState *s) {
 
 void sound_stop_alarm(AppState *s) {
 
-    s->stop_sound = TRUE;
+    InterlockedExchange(&s->stop_sound, TRUE);
     s->sound_preview = FALSE;
 
     wait_and_close_thread(&s->hSoundThread);

@@ -82,7 +82,7 @@ void tray_update_tooltip(AppState *s) {
     int best_hour = ALARM_UNSET;
     int best_min = ALARM_UNSET;
 
-    for (int i = 0; i < s->alarm_count; i++) {
+    for (int i = 0; i < MAX_ALARMS; i++) {
         int delta_minutes;
         if (!compute_next_alarm_delta_minutes(&st, &s->alarms[i], &delta_minutes)) {
             continue;

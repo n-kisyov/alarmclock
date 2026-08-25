@@ -508,24 +508,34 @@ static void dismiss_alarm(void) {
 /* ---------- countdown set dialog ---------- */
 
 INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
-    static AppState *s;
+    /* On the window, not in a static: WM_CTLCOLOR* is not guaranteed to arrive
+       after WM_INITDIALOG, and these handlers dereference the pointer. */
+    AppState *s = (AppState *)GetWindowLongPtrW(hDlg, GWLP_USERDATA);
     switch (msg) {
     case WM_INITDIALOG:
         s = (AppState *)lp;
+        SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)s);
         theme_apply(hDlg, s->dark_mode);
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_hours);   SetDlgItemText(hDlg,IDC_CD_HOURS,b); }
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_mins);    SetDlgItemText(hDlg,IDC_CD_MINS,b); }
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_secs);    SetDlgItemText(hDlg,IDC_CD_SECS,b); }
         return TRUE;
     case WM_CTLCOLORSTATIC:
+        if (!s) break;
         if (s->dark_mode) { SetTextColor((HDC)wp,s->textColor); SetBkColor((HDC)wp,s->bgColor); SetBkMode((HDC)wp,TRANSPARENT); }
         return (INT_PTR)s->hBgBrush;
     case WM_CTLCOLOREDIT:
+        if (!s) break;
         if (s->dark_mode) { SetTextColor((HDC)wp,s->textColor); SetBkColor((HDC)wp,s->panelBgColor); }
         return (INT_PTR)s->hPanelBrush;
-    case WM_CTLCOLORBTN: return (INT_PTR)s->hBgBrush;
-    case WM_CTLCOLORDLG: return (INT_PTR)s->hBgBrush;
+    case WM_CTLCOLORBTN:
+        if (!s) break;
+        return (INT_PTR)s->hBgBrush;
+    case WM_CTLCOLORDLG:
+        if (!s) break;
+        return (INT_PTR)s->hBgBrush;
     case WM_COMMAND:
+        if (!s) break;
         switch (LOWORD(wp)) {
         case IDOK: {
             TCHAR b[16];

@@ -19,7 +19,10 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st) {
     int nowMin = (int)st->wHour * 60 + (int)st->wMinute;
     if (nowMin == s->last_fire_min) return FALSE;
 
-    for (int i = 0; i < s->alarm_count; i++) {
+    /* Every slot, not just the displayed ones: alarm_count is a display
+       preference, and lowering it used to strand enabled alarms as invisible
+       and permanently silent. */
+    for (int i = 0; i < MAX_ALARMS; i++) {
         if (!s->alarms[i].enabled ||
             s->alarms[i].hour != (int)st->wHour ||
             s->alarms[i].minute != (int)st->wMinute ||

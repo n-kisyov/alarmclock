@@ -35,10 +35,44 @@ void autostart_update(AppState *s) {
     }
 }
 
+/* A saved position on a monitor that is no longer attached would put the window
+   off-screen - and since closing hides to the tray rather than exiting, there is
+   no easy way to drag it back. */
+static void ensure_on_screen(int *x, int *y, int w, int h) {
+    RECT r = { *x, *y, *x + w, *y + h };
+    if (MonitorFromRect(&r, MONITOR_DEFAULTTONULL) != NULL) return;
+
+    RECT work = {0};
+    if (!SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+        work.left = work.top = 0;
+        work.right  = GetSystemMetrics(SM_CXSCREEN);
+        work.bottom = GetSystemMetrics(SM_CYSCREEN);
+    }
+    *x = work.left + ((work.right - work.left) - w) / 2;
+    *y = work.top  + ((work.bottom - work.top) - h) / 2;
+    if (*x < work.left) *x = work.left;
+    if (*y < work.top)  *y = work.top;
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
                     LPSTR lpCmdLine, int nCmdShow) {
     (void)hPrevInstance;
     (void)lpCmdLine;
+
+    /* Two instances means two tray icons, two alarms ringing over each other,
+       and both writing the settings file on exit - last one wins, and the
+       other's alarm edits are gone. */
+    HANDLE hInstanceMutex = CreateMutexW(NULL, TRUE, L"Local\\AlarmClockSingleInstance");
+    if (hInstanceMutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND existing = FindWindowW(APP_CLASS, NULL);
+        if (existing) {
+            if (IsIconic(existing)) ShowWindow(existing, SW_RESTORE);
+            else ShowWindow(existing, SW_SHOW);
+            SetForegroundWindow(existing);
+        }
+        CloseHandle(hInstanceMutex);
+        return 0;
+    }
 
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
@@ -93,6 +127,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         g_state.winY = (GetSystemMetrics(SM_CYSCREEN) - g_state.winH) / 2;
     }
 
+    ensure_on_screen(&g_state.winX, &g_state.winY, g_state.winW, g_state.winH);
+
     HWND hwnd = CreateWindowExW(
         g_state.always_on_top ? WS_EX_TOPMOST : 0,
         APP_CLASS, APP_NAME,
@@ -126,9 +162,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     UpdateWindow(hwnd);
 
     MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0)) {
+    BOOL got;
+    while ((got = GetMessageW(&msg, NULL, 0, 0)) != 0) {
+        if (got == -1) break;   /* -1 is an error, not another message */
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+    }
+
+    if (hInstanceMutex) {
+        ReleaseMutex(hInstanceMutex);
+        CloseHandle(hInstanceMutex);
     }
 
     return (int)msg.wParam;

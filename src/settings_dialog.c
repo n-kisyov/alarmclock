@@ -15,12 +15,20 @@ static const TCHAR *vol_items[] = {
 static const int vol_values[] = {10,20,30,40,50,60,70,80,90,100};
 static const int vol_count = 10;
 
+/* Kept on the window rather than in a function-level static: WM_CTLCOLOR* is
+   not guaranteed to arrive after WM_INITDIALOG, and a static left the pointer
+   NULL on the first message of the very first invocation. */
+static AppState *dlg_state(HWND hDlg) {
+    return (AppState *)GetWindowLongPtrW(hDlg, GWLP_USERDATA);
+}
+
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
-    static AppState *s;
+    AppState *s = dlg_state(hDlg);
 
     switch (msg) {
     case WM_INITDIALOG: {
         s = (AppState *)lp;
+        SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)s);
 
         theme_dialog_init(hDlg, s);
 
@@ -74,19 +82,19 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_CTLCOLORSTATIC:
-        theme_dialog_colors(hDlg, s, (HWND)lp, (HDC)wp);
-        return (INT_PTR)s->hBgBrush;
-
     case WM_CTLCOLORBTN:
+        if (!s) break;
         theme_dialog_colors(hDlg, s, (HWND)lp, (HDC)wp);
         return (INT_PTR)s->hBgBrush;
 
     case WM_CTLCOLOREDIT:
+        if (!s) break;
         SetTextColor((HDC)wp, s->textColor);
         SetBkColor((HDC)wp, s->panelBgColor);
         return (INT_PTR)s->hPanelBrush;
 
     case WM_CTLCOLORDLG:
+        if (!s) break;
         return (INT_PTR)s->hBgBrush;
 
     case WM_MEASUREITEM: {
@@ -100,7 +108,7 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
-        if (dis->CtlType != ODT_COMBOBOX) break;
+        if (!s || dis->CtlType != ODT_COMBOBOX) break;
 
         TCHAR buf[8];
         if (dis->itemID == (UINT)-1 ||
@@ -128,6 +136,7 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     }
 
     case WM_COMMAND:
+        if (!s) break;
         switch (LOWORD(wp)) {
         case IDOK: {
             BOOL newDark = (IsDlgButtonChecked(hDlg, IDC_DARKMODE) == BST_CHECKED);
@@ -154,6 +163,25 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
 
             s->sound_mode = (IsDlgButtonChecked(hDlg, IDC_SOUND_MP3) == BST_CHECKED)
                 ? SOUND_MP3 : SOUND_SIMPLE;
+
+            /* Alarms in slots the panel no longer shows still ring, so say so
+               rather than letting them fire from nowhere. */
+            {
+                HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_COUNT);
+                int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+                if (sel >= 0) {
+                    for (int i = sel + 1; i < MAX_ALARMS; i++) {
+                        if (s->alarms[i].enabled && s->alarms[i].hour != ALARM_UNSET) {
+                            MessageBoxW(hDlg,
+                                L"Some enabled alarms sit in slots that this many "
+                                L"rows will not show. They will still ring.\n\n"
+                                L"Raise the slot count to see them again.",
+                                L"AlarmClock", MB_OK | MB_ICONINFORMATION);
+                            break;
+                        }
+                    }
+                }
+            }
 
             {
                 HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_COUNT);
@@ -193,29 +221,35 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             EndDialog(hDlg, IDOK);
-            sound_stop_alarm(s);
+            /* Only the preview - this used to stop a genuinely ringing alarm
+               while leaving alarm_active set, so the window kept offering
+               SNOOZE and DISMISS over silence. */
+            if (s->sound_preview) sound_stop_alarm(s);
             return TRUE;
         }
         case IDCANCEL:
-            sound_stop_alarm(s);
+            if (s->sound_preview) sound_stop_alarm(s);
             EndDialog(hDlg, IDCANCEL);
             return TRUE;
 
         case IDC_PREVIEW_SOUND: {
-            if (s->hSoundThread) return TRUE;
+            if (s->alarm_active) return TRUE;   /* do not talk over a real alarm */
+
+            /* One stop path, so repeated presses cannot leak the crescendo and
+               preview thread handles by overwriting them. */
+            sound_stop_alarm(s);
+
+            /* Preview the radio button as it currently stands, without
+               committing it - Cancel has to be able to undo the choice. */
+            int pending = (IsDlgButtonChecked(hDlg, IDC_SOUND_MP3) == BST_CHECKED)
+                ? SOUND_MP3 : SOUND_SIMPLE;
+            int saved = s->sound_mode;
+            s->sound_mode = pending;
             s->sound_preview = TRUE;
-            s->stop_sound = FALSE;
             sound_play_alarm(s);
+            s->sound_mode = saved;
             return TRUE;
         }
-
-        case IDC_SOUND_SIMPLE:
-            if (HIWORD(wp) == BN_CLICKED) s->sound_mode = SOUND_SIMPLE;
-            break;
-
-        case IDC_SOUND_MP3:
-            if (HIWORD(wp) == BN_CLICKED) s->sound_mode = SOUND_MP3;
-            break;
         }
         break;
     }

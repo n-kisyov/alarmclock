@@ -84,7 +84,9 @@ typedef struct {
     HANDLE   hSoundThread;
     HANDLE   hCrescendoThread;
     HANDLE   hPreviewThread;
-    BOOL     stop_sound;
+    /* Written by the UI thread, polled by the sound threads. volatile keeps
+       -O2 from caching it in a register inside their loops. */
+    volatile LONG stop_sound;
     BOOL     sound_preview;
 
     TCHAR    exe_dir[MAX_PATH];

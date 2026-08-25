@@ -88,14 +88,24 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
 
         case IDOK: {
-            TCHAR buf[64];
-            GetDlgItemTextW(hDlg, IDC_ALARM_LABEL, data->label, 31);
-            data->label[31] = 0;
+            GetDlgItemTextW(hDlg, IDC_ALARM_LABEL, data->label,
+                            ARRAYSIZE(data->label));
 
-            GetDlgItemText(hDlg, IDC_ALARM_HOUR, buf, 16);
-            int h = _wtoi(buf);
-            GetDlgItemText(hDlg, IDC_ALARM_MINUTE, buf, 16);
-            int m = _wtoi(buf);
+            TCHAR hbuf[16], mbuf[16];
+            GetDlgItemText(hDlg, IDC_ALARM_HOUR, hbuf, ARRAYSIZE(hbuf));
+            GetDlgItemText(hDlg, IDC_ALARM_MINUTE, mbuf, ARRAYSIZE(mbuf));
+
+            /* An empty field is not zero. _wtoi("") returns 0, which passed the
+               range check below and quietly turned "I opened Edit and pressed
+               OK" into a real 00:00 alarm. */
+            if (hbuf[0] == 0 || mbuf[0] == 0) {
+                MessageBoxW(hDlg, L"Enter both an hour (0-23) and a minute (0-59).",
+                            L"Invalid Time", MB_OK | MB_ICONWARNING);
+                return TRUE;
+            }
+
+            int h = _wtoi(hbuf);
+            int m = _wtoi(mbuf);
 
             if (h < 0 || h > 23 || m < 0 || m > 59) {
                 MessageBoxW(hDlg, L"Please enter valid hour (0-23) and minute (0-59).",
