@@ -222,6 +222,10 @@ void clock_draw_stopwatch(HDC hdc, const RECT *rc, DWORD elapsed_ms, const AppSt
 }
 
 void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const AppState *s) {
+    /* psst is the caller's whole-second local time. The hands need sub-second
+       precision for the sweep, so this reads its own timestamp instead - but it
+       must convert to local time first, which is what GetSystemTime* does not
+       do on its own. */
     (void)psst;
 
     int w = rc->right - rc->left;
@@ -231,14 +235,16 @@ void clock_draw_analog(HDC hdc, const RECT *rc, const SYSTEMTIME *psst, const Ap
     REAL radius = (REAL)((w < h ? w : h) / 2) - 8.0f;
     if (radius < 30.0f) radius = 30.0f;
 
-    FILETIME ft;
-    GetSystemTimePreciseAsFileTime(&ft);
+    FILETIME ftUtc, ftLocal;
+    GetSystemTimePreciseAsFileTime(&ftUtc);
+    if (!FileTimeToLocalFileTime(&ftUtc, &ftLocal))
+        ftLocal = ftUtc;
     ULARGE_INTEGER uli;
-    uli.LowPart  = ft.dwLowDateTime;
-    uli.HighPart = ft.dwHighDateTime;
+    uli.LowPart  = ftLocal.dwLowDateTime;
+    uli.HighPart = ftLocal.dwHighDateTime;
     ULONGLONG fileTimeMs = uli.QuadPart / 10000;
     SYSTEMTIME lt;
-    FileTimeToSystemTime(&ft, &lt);
+    FileTimeToSystemTime(&ftLocal, &lt);
 
     double msFrac = (double)(fileTimeMs % 1000) / 1000.0;
     double secFrac = lt.wSecond + msFrac;

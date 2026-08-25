@@ -7,6 +7,21 @@ static TCHAR  **g_mp3_paths = NULL;
 static int     g_mp3_count  = 0;
 static int     g_mp3_index  = 0;
 
+/* MCI takes volume on a 0-1000 scale; alarm_volume is a percentage. */
+#define MCI_VOL_MAX       1000
+#define CRESCENDO_FLOOR   100
+
+/* Set once the ramp has finished (or been cut short) so that tracks started
+   later by the MCI notify open at full volume instead of the ramp floor. */
+static BOOL    g_crescendo_done = FALSE;
+
+static int mp3_target_volume(const AppState *s) {
+    int v = s->alarm_volume * (MCI_VOL_MAX / 100);
+    if (v < 0) v = 0;
+    if (v > MCI_VOL_MAX) v = MCI_VOL_MAX;
+    return v;
+}
+
 static void shuffle_mp3s(void) {
     for (int i = g_mp3_count - 1; i > 0; i--) {
         int j = rand() % (i + 1);
@@ -75,8 +90,7 @@ static BOOL find_mp3_files(AppState *s) {
     return TRUE;
 }
 
-static void apply_mp3_volume(AppState *s) {
-    int mciVol = s->alarm_volume * 10;
+static void set_mp3_volume(int mciVol) {
     WCHAR cmd[64];
     wsprintfW(cmd, L"setaudio alarm_mp3 volume to %d", mciVol);
     mciSendStringW(cmd, NULL, 0, NULL);
@@ -94,10 +108,11 @@ static void play_mp3_next(AppState *s) {
     TCHAR cmd[1024];
     wsprintf(cmd, L"open \"%s\" type mpegvideo alias alarm_mp3", g_mp3_paths[g_mp3_index]);
     if (mciSendStringW(cmd, NULL, 0, NULL) == 0) {
-        apply_mp3_volume(s);
-        if (s->crescendo && !s->sound_preview) {
-            mciSendStringW(L"setaudio alarm_mp3 volume to 100", NULL, 0, NULL);
-        }
+        /* Only open at the ramp floor while a crescendo is actually still
+           climbing. Once it has finished, later tracks start at full volume
+           rather than being pinned at 10% for the rest of the alarm. */
+        BOOL ramping = s->crescendo && !s->sound_preview && !g_crescendo_done;
+        set_mp3_volume(ramping ? CRESCENDO_FLOOR : mp3_target_volume(s));
         mciSendStringW(L"play alarm_mp3 notify", NULL, 0, s->hMainWnd);
         g_mp3_index++;
     }
@@ -106,14 +121,16 @@ static void play_mp3_next(AppState *s) {
 static DWORD WINAPI cresendo_thread(LPVOID param) {
     AppState *s = (AppState *)param;
 
+    /* Ramps to the volume the user chose, not to 100%. */
+    int target = mp3_target_volume(s);
+    if (target < CRESCENDO_FLOOR) target = CRESCENDO_FLOOR;
+
     for (int step = 0; step < 15 && !s->stop_sound; step++) {
-        int vol = 100 + (1000 - 100) * step / 14;
-        if (vol > 1000) vol = 1000;
-        WCHAR cmd[64];
-        wsprintfW(cmd, L"setaudio alarm_mp3 volume to %d", vol);
-        mciSendStringW(cmd, NULL, 0, NULL);
+        set_mp3_volume(CRESCENDO_FLOOR + (target - CRESCENDO_FLOOR) * step / 14);
         Sleep(1000);
     }
+    if (!s->stop_sound) set_mp3_volume(target);
+    g_crescendo_done = TRUE;
     return 0;
 }
 
@@ -181,6 +198,11 @@ static void wait_and_close_thread(HANDLE *thread_handle) {
 }
 
 void sound_play_alarm(AppState *s) {
+    /* Cleared here rather than in the simple-tone branch below: the MP3 branch
+       returns before ever reaching that assignment, so a leftover TRUE from the
+       previous stop made the crescendo and preview threads exit immediately. */
+    s->stop_sound = FALSE;
+    g_crescendo_done = FALSE;
 
     if (s->sound_mode == SOUND_MP3) {
         if (find_mp3_files(s)) {
@@ -195,7 +217,6 @@ void sound_play_alarm(AppState *s) {
         }
     }
 
-    s->stop_sound = FALSE;
     s->hSoundThread = CreateThread(NULL, 0, sound_simple_thread, s, 0, NULL);
     if (s->sound_preview) {
         s->hPreviewThread = CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);

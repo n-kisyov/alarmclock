@@ -341,6 +341,7 @@ static void draw_mode_bar(HDC hdc, const RECT *clockRect) {
 /* ---------- snooze / dismiss (forward) ---------- */
 static void snooze_alarm(void);
 static void dismiss_alarm(void);
+static void show_and_focus(HWND hwnd);
 
 /* ---------- mode bar hit testing ---------- */
 
@@ -549,24 +550,6 @@ static void on_paint(HWND hwnd) {
     RECT clkInner = clockRect;
     clkInner.top += 3; clkInner.bottom -= 36;
 
-    /* Always tick running countdown regardless of mode */
-    {
-        ULONGLONG now = GetTickCount64();
-        if (g_state.cd_running) {
-            int elapsed = (int)(now - g_state.cd_last_tick);
-            g_state.cd_remaining_ms -= elapsed;
-            g_state.cd_last_tick = now;
-            if (g_state.cd_remaining_ms <= 0) {
-                g_state.cd_remaining_ms = 0;
-                g_state.cd_running = FALSE;
-                if (!g_state.alarm_active) {
-                    g_state.alarm_active = TRUE;
-                    sound_play_alarm(&g_state);
-                }
-            }
-        }
-    }
-
     DWORD swElapsed = g_state.sw_accumulated_ms;
     if (g_state.sw_running)
         swElapsed += GetTickCount() - g_state.sw_start_tick;
@@ -760,11 +743,72 @@ static void on_command(HWND hwnd, WPARAM wp) {
     case IDM_EXIT:
         sound_stop_alarm(s); DestroyWindow(hwnd); break;
     case IDM_TRAY_SHOW:
-        AnimateWindow(hwnd, 200, AW_BLEND);
-        ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd); break;
+        show_and_focus(hwnd); break;
     case IDM_TRAY_EXIT:
         sound_stop_alarm(s); DestroyWindow(hwnd); break;
     }
+}
+
+/* SW_SHOW displays a window at its current state, which for a minimized window
+   means it stays minimized - so an alarm could ring with its own window still
+   in the taskbar. The fade is kept for the hidden-to-tray case, where it works. */
+static void show_and_focus(HWND hwnd) {
+    if (IsIconic(hwnd)) {
+        ShowWindow(hwnd, SW_RESTORE);
+    } else if (!IsWindowVisible(hwnd)) {
+        AnimateWindow(hwnd, 200, AW_BLEND);
+        ShowWindow(hwnd, SW_SHOW);
+    } else {
+        ShowWindow(hwnd, SW_SHOW);
+    }
+    SetForegroundWindow(hwnd);
+}
+
+/* Runs off the timer, not the paint, so the countdown keeps running - and still
+   fires - while the window is hidden in the tray or minimized. */
+static void tick_countdown(void) {
+    AppState *s = &g_state;
+    if (!s->cd_running) return;
+
+    ULONGLONG now = GetTickCount64();
+    s->cd_remaining_ms -= (int)(now - s->cd_last_tick);
+    s->cd_last_tick = now;
+
+    if (s->cd_remaining_ms <= 0) {
+        s->cd_remaining_ms = 0;
+        s->cd_running = FALSE;
+        if (!s->alarm_active) {
+            s->alarm_active = TRUE;
+            sound_play_alarm(s);
+            /* Bring the window up like a scheduled alarm does, so there is
+               something to press Dismiss on. */
+            s->app_mode = APP_MODE_COUNTDOWN;
+            if (s->hMainWnd) show_and_focus(s->hMainWnd);
+        }
+    }
+}
+
+static void show_alarm_balloon(AppState *s, const SYSTEMTIME *st) {
+    s->nid.uFlags |= NIF_INFO;
+    s->nid.dwInfoFlags = NIIF_USER;
+    lstrcpyW(s->nid.szInfoTitle, L"AlarmClock");
+    s->nid.szInfo[0] = 0;
+    if (s->alarms_enabled) {
+        for (int i = 0; i < MAX_ALARMS; i++) {
+            if (s->alarms[i].hour == (int)st->wHour && s->alarms[i].minute == (int)st->wMinute) {
+                wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
+                          s->alarms[i].hour, s->alarms[i].minute,
+                          s->alarms[i].label[0] ? s->alarms[i].label : L"Alarm");
+                break;
+            }
+        }
+    }
+    Shell_NotifyIconW(NIM_MODIFY, &s->nid);
+
+    /* Leaving NIF_INFO set would make every later tooltip update re-raise
+       this same balloon. */
+    s->nid.uFlags &= ~NIF_INFO;
+    s->nid.szInfo[0] = 0;
 }
 
 static void on_timer(HWND hwnd) {
@@ -773,35 +817,20 @@ static void on_timer(HWND hwnd) {
     GetLocalTime(&st);
     static int lastAlarmSec = -1;
 
+    tick_countdown();
+
     if ((int)st.wSecond != lastAlarmSec) {
         lastAlarmSec = (int)st.wSecond;
 
         if (alarms_check(s, &st)) {
-            sound_play_alarm(s);
-            if (IsIconic(hwnd)) {
-                AnimateWindow(hwnd, 200, AW_BLEND);
-            }
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
+            /* Sampled before showing the window, or the test below would
+               always see a visible window and never notify. */
+            BOOL wasInBackground = IsIconic(hwnd) || !IsWindowVisible(hwnd);
 
-            /* Tray balloon */
-            if (IsIconic(hwnd) || !IsWindowVisible(hwnd)) {
-                s->nid.uFlags |= NIF_INFO;
-                s->nid.dwInfoFlags = NIIF_USER;
-                lstrcpyW(s->nid.szInfoTitle, L"AlarmClock");
-                s->nid.szInfo[0] = 0;
-                if (g_state.alarms_enabled) {
-                    for (int i = 0; i < s->alarm_count; i++) {
-                        if (s->alarms[i].hour == (int)st.wHour && s->alarms[i].minute == (int)st.wMinute) {
-                            wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
-                                      s->alarms[i].hour, s->alarms[i].minute,
-                                      s->alarms[i].label[0] ? s->alarms[i].label : L"Alarm");
-                            break;
-                        }
-                    }
-                }
-                Shell_NotifyIconW(NIM_MODIFY, &s->nid);
-            }
+            sound_play_alarm(s);
+            show_and_focus(hwnd);
+
+            if (wasInBackground) show_alarm_balloon(s, &st);
         }
 
         if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
@@ -809,8 +838,7 @@ static void on_timer(HWND hwnd) {
             s->alarm_active = TRUE;
             s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
             sound_play_alarm(s);
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
+            show_and_focus(hwnd);
         }
 
         tray_update_tooltip(s);
@@ -914,8 +942,7 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TRAYICON:
         if (LOWORD(lp) == WM_RBUTTONUP) tray_show_menu(hwnd, &g_state);
         else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
-            AnimateWindow(hwnd, 200, AW_BLEND);
-            ShowWindow(hwnd, SW_SHOW); SetForegroundWindow(hwnd);
+            show_and_focus(hwnd);
         }
         return 0;
     case MM_MCINOTIFY: sound_on_mci_notify(&g_state); return 0;

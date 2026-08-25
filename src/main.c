@@ -57,6 +57,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_state.acrylic         = TRUE;
     g_state.app_mode        = APP_MODE_CLOCK;
     g_state.alarm_volume    = 80;
+    /* Not 0: minute 0 is midnight, and alarms_check reads a matching
+       last_fire_min as "already fired", which would mute a 00:00 alarm. */
+    g_state.last_fire_min   = -1;
 
     GetModuleFileNameW(NULL, g_state.exe_dir, MAX_PATH);
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
