@@ -57,7 +57,8 @@
 #define IDM_TRAY_EXIT        2002
 
 #define WM_TRAYICON          (WM_APP + 1)
-#define WM_SOUND_PREVIEW_DONE (WM_APP + 2)
+#define WM_AUDIO_TRACK_DONE   (WM_APP + 3)
 #define TIMER_CLOCK          1
+#define TIMER_SOUND_PREVIEW  2
 
 #endif

@@ -1365,7 +1365,14 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CREATE: return on_create(hwnd);
     case WM_PAINT: on_paint(hwnd); return 0;
     case WM_ERASEBKGND: return 1;
-    case WM_TIMER: if (wp == TIMER_CLOCK) on_timer(hwnd); return 0;
+    case WM_TIMER:
+        if (wp == TIMER_CLOCK) {
+            on_timer(hwnd);
+        } else if (wp == TIMER_SOUND_PREVIEW) {
+            KillTimer(hwnd, TIMER_SOUND_PREVIEW);
+            sound_stop_alarm(&g_state);
+        }
+        return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lp;
         mmi->ptMinTrackSize.x = S(400);
@@ -1426,18 +1433,13 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         AnimateWindow(hwnd, 200, AW_HIDE | AW_BLEND);
         ShowWindow(hwnd, SW_HIDE); return 0;
     case WM_DESTROY: on_destroy(hwnd); return 0;
-    case WM_SOUND_PREVIEW_DONE:
-        if (g_state.sound_preview || g_state.hPreviewThread) {
-            sound_stop_alarm(&g_state);
-        }
-        return 0;
     case WM_TRAYICON:
         if (LOWORD(lp) == WM_RBUTTONUP) tray_show_menu(hwnd, &g_state);
         else if (LOWORD(lp) == WM_LBUTTONDBLCLK) {
             show_and_focus(hwnd);
         }
         return 0;
-    case MM_MCINOTIFY: sound_on_mci_notify(&g_state); return 0;
+    case WM_AUDIO_TRACK_DONE: sound_on_track_done(&g_state); return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }

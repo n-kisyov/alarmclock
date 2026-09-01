@@ -2,6 +2,7 @@
 #include "theme.h"
 #include "settings_data.h"
 #include "clock_renderer.h"
+#include "audio.h"
 #include <dwmapi.h>
 #include <strsafe.h>
 #include <stdlib.h>
@@ -90,6 +91,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     InitCommonControlsEx(&icc);
 
     clock_init();
+    audio_init();
 
     ZeroMemory(&g_state, sizeof(g_state));
     /* Zeroing leaves every slot at hour 0, minute 0 - a real midnight alarm as
@@ -189,6 +191,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    audio_shutdown();
 
     if (hInstanceMutex) {
         ReleaseMutex(hInstanceMutex);

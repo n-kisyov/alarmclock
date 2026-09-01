@@ -99,7 +99,8 @@ $Sources = @(
     "tray.c",
     "settings_data.c",
     "json_utils.c",
-    "sound.c"
+    "sound.c",
+    "audio.c"
 )
 
 Write-Host "Compiling source files..." -ForegroundColor Cyan
@@ -130,7 +131,8 @@ if ($Compiled -gt 0 -or (Test-Stale $OutExe $LinkObjs)) {
     Write-Host "Linking..." -ForegroundColor Cyan
     $ArgsLink = @("-o", $OutExe) + $LinkObjs + @(
         "-mwindows", "-O2",
-        "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lgdiplus"
+        "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lgdiplus",
+        "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt"
     )
     & $GccPath @ArgsLink
     if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }
@@ -156,4 +158,17 @@ if ($Test) {
 
     & $TestExe
     if ($LASTEXITCODE -ne 0) { Write-Error "Tests failed"; exit 1 }
+
+    # The audio harness drives the real device at zero gain: it proves the
+    # pipeline works end to end without making a sound.
+    $AudioExe = Join-Path $ObjDir "test_audio.exe"
+    & $GccPath (@("-o", $AudioExe,
+                  (Join-Path $TestDir "test_audio.c"),
+                  (Join-Path $SrcDir  "audio.c"),
+                  (Join-Path $SrcDir  "sound.c")) + $CFlags +
+                @("-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt"))
+    if ($LASTEXITCODE -ne 0) { Write-Error "Audio test build failed"; exit 1 }
+
+    & $AudioExe
+    if ($LASTEXITCODE -ne 0) { Write-Error "Audio tests failed"; exit 1 }
 }

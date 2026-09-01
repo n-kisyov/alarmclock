@@ -93,16 +93,8 @@ typedef struct {
     NOTIFYICONDATAW nid;
     BOOL     tray_added;
 
-    HANDLE   hSoundThread;
-    HANDLE   hCrescendoThread;
-    HANDLE   hPreviewThread;
-    /* Written by the UI thread, polled by the sound threads. volatile keeps
-       -O2 from caching it in a register inside their loops. */
-    volatile LONG stop_sound;
-    /* Manual-reset, signalled alongside stop_sound. The sound threads wait on
-       it instead of sleeping, so a stop is seen at once rather than up to a
-       second later - which the UI thread spent blocked. */
-    HANDLE   hStopEvent;
+    /* The sound threads are gone: audio.c owns the one render thread, and a
+       stop signals its event rather than waiting for a sleep to expire. */
     BOOL     sound_preview;
 
     TCHAR    exe_dir[MAX_PATH];
@@ -136,7 +128,7 @@ UINT   tray_taskbar_created_msg(void);
 
 void   sound_play_alarm(AppState *s);
 void   sound_stop_alarm(AppState *s);
-void   sound_on_mci_notify(AppState *s);
+void   sound_on_track_done(AppState *s);
 
 void   autostart_update(AppState *s);
 

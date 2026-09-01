@@ -1,55 +1,87 @@
+/* Alarm sound policy: which track, how loud, and when to stop. The playback
+   itself lives in audio.c.
+
+   This used to drive MCI's "mpegvideo" device directly, which meant mp3 and
+   nothing else, and the simple-tone mode went through Beep() - which has no
+   volume at all, so the volume setting silently did nothing there. Both now go
+   through one render path with one software gain, which is also what makes the
+   crescendo and the sleep-timer fade the same mechanism. */
+
 #include "sound.h"
+#include "audio.h"
 #include "main.h"
-#include <stdio.h>
 #include <stdlib.h>
 #include <strsafe.h>
 
-static TCHAR  **g_mp3_paths = NULL;
-static int     g_mp3_count  = 0;
-static int     g_mp3_index  = 0;
+static TCHAR  **g_tracks = NULL;
+static int      g_count  = 0;
+static int      g_index  = 0;
 
-/* MCI takes volume on a 0-1000 scale; alarm_volume is a percentage. */
-#define MCI_VOL_MAX       1000
-#define CRESCENDO_FLOOR   100
+/* Last seen write time of the songs folder, so the scan repeats only when its
+   contents have actually changed. */
+static FILETIME g_songs_mtime;
 
-/* Set once the ramp has finished (or been cut short) so that tracks started
-   later by the MCI notify open at full volume instead of the ramp floor. */
-static BOOL    g_crescendo_done = FALSE;
+/* When the crescendo is due to reach full volume, so a track change mid-ramp
+   picks it up where it left off instead of restarting at the floor. */
+static ULONGLONG g_crescendo_end = 0;
 
-static int mp3_target_volume(const AppState *s) {
-    int v = s->alarm_volume * (MCI_VOL_MAX / 100);
-    if (v < 0) v = 0;
-    if (v > MCI_VOL_MAX) v = MCI_VOL_MAX;
-    return v;
+#define CRESCENDO_MS     15000
+#define CRESCENDO_FLOOR  0.10f
+#define PREVIEW_MS        3000
+
+/* Media Foundation has decoders for all of these. MCI could only ever open the
+   first one. */
+static const WCHAR *kAudioExtensions[] = {
+    L".mp3", L".wav", L".flac", L".m4a", L".wma", L".aac", L".mp4"
+};
+
+static BOOL has_audio_extension(const WCHAR *name) {
+    const WCHAR *dot = NULL;
+    for (const WCHAR *p = name; *p; p++) {
+        if (*p == L'.') dot = p;
+    }
+    if (!dot) return FALSE;
+
+    for (size_t i = 0; i < ARRAYSIZE(kAudioExtensions); i++) {
+        if (lstrcmpiW(dot, kAudioExtensions[i]) == 0) return TRUE;
+    }
+    return FALSE;
 }
 
-static void shuffle_mp3s(void) {
-    for (int i = g_mp3_count - 1; i > 0; i--) {
+static float target_gain(const AppState *s) {
+    int v = s->alarm_volume;
+    if (v < 0)   v = 0;
+    if (v > 100) v = 100;
+    return (float)v / 100.0f;
+}
+
+/* ---------- the playlist ---------- */
+
+static void shuffle_tracks(void) {
+    for (int i = g_count - 1; i > 0; i--) {
         int j = rand() % (i + 1);
-        TCHAR *tmp = g_mp3_paths[i];
-        g_mp3_paths[i] = g_mp3_paths[j];
-        g_mp3_paths[j] = tmp;
+        TCHAR *tmp = g_tracks[i];
+        g_tracks[i] = g_tracks[j];
+        g_tracks[j] = tmp;
     }
-    g_mp3_index = 0;
+    g_index = 0;
 }
 
-static void free_mp3_paths(void) {
-    if (g_mp3_paths) {
-        for (int i = 0; i < g_mp3_count; i++) {
-            free(g_mp3_paths[i]);
-        }
-        free(g_mp3_paths);
-        g_mp3_paths = NULL;
+static void free_tracks(void) {
+    if (g_tracks) {
+        for (int i = 0; i < g_count; i++) free(g_tracks[i]);
+        free(g_tracks);
+        g_tracks = NULL;
     }
-    g_mp3_count = 0;
-    g_mp3_index = 0;
+    g_count = 0;
+    g_index = 0;
 }
 
-static BOOL find_mp3_files(AppState *s) {
-    free_mp3_paths();
+static BOOL scan_tracks(AppState *s) {
+    free_tracks();
 
     TCHAR search[MAX_PATH];
-    if (FAILED(StringCchPrintfW(search, MAX_PATH, L"%s\\songs\\*.mp3", s->exe_dir)))
+    if (FAILED(StringCchPrintfW(search, MAX_PATH, L"%s\\songs\\*", s->exe_dir)))
         return FALSE;
 
     WIN32_FIND_DATAW fd;
@@ -57,62 +89,53 @@ static BOOL find_mp3_files(AppState *s) {
     if (hFind == INVALID_HANDLE_VALUE) return FALSE;
 
     do {
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
-            g_mp3_count++;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+            has_audio_extension(fd.cFileName))
+            g_count++;
     } while (FindNextFileW(hFind, &fd));
     FindClose(hFind);
 
-    if (g_mp3_count == 0) return FALSE;
+    if (g_count == 0) return FALSE;
 
-    g_mp3_paths = (TCHAR **)malloc(sizeof(TCHAR *) * g_mp3_count);
-    if (!g_mp3_paths) { g_mp3_count = 0; return FALSE; }
+    g_tracks = (TCHAR **)malloc(sizeof(TCHAR *) * g_count);
+    if (!g_tracks) { g_count = 0; return FALSE; }
 
     int idx = 0;
     hFind = FindFirstFileW(search, &fd);
-    if (hFind == INVALID_HANDLE_VALUE) {
-        free_mp3_paths();
-        return FALSE;
-    }
+    if (hFind == INVALID_HANDLE_VALUE) { free_tracks(); return FALSE; }
 
-    /* Bounded by the count from the first pass: a file appearing in the songs
-       folder between the two scans would otherwise write past the allocation. */
+    /* Bounded by the first pass: a file appearing between the two scans would
+       otherwise write past the allocation. */
     do {
-        if (idx >= g_mp3_count) break;
-        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-            g_mp3_paths[idx] = (TCHAR *)malloc(MAX_PATH * sizeof(TCHAR));
-            if (!g_mp3_paths[idx]) {
-                FindClose(hFind);
-                free_mp3_paths();
-                return FALSE;
-            }
-            if (FAILED(StringCchPrintfW(g_mp3_paths[idx], MAX_PATH,
-                                        L"%s\\songs\\%s", s->exe_dir, fd.cFileName))) {
-                free(g_mp3_paths[idx]);
-                g_mp3_paths[idx] = NULL;
-                continue;   /* path too long for this entry; skip it */
-            }
-            idx++;
+        if (idx >= g_count) break;
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            !has_audio_extension(fd.cFileName))
+            continue;
+
+        g_tracks[idx] = (TCHAR *)malloc(MAX_PATH * sizeof(TCHAR));
+        if (!g_tracks[idx]) { FindClose(hFind); free_tracks(); return FALSE; }
+
+        if (FAILED(StringCchPrintfW(g_tracks[idx], MAX_PATH,
+                                    L"%s\\songs\\%s", s->exe_dir, fd.cFileName))) {
+            free(g_tracks[idx]);
+            g_tracks[idx] = NULL;
+            continue;               /* path too long for this entry; skip it */
         }
+        idx++;
     } while (FindNextFileW(hFind, &fd));
     FindClose(hFind);
 
     /* Fewer than the first pass counted, if a file was removed in between. */
-    g_mp3_count = idx;
-    if (g_mp3_count == 0) { free_mp3_paths(); return FALSE; }
+    g_count = idx;
+    if (g_count == 0) { free_tracks(); return FALSE; }
 
-    shuffle_mp3s();
+    shuffle_tracks();
     return TRUE;
 }
 
-/* Last seen write time of the songs folder, so the scan is repeated only when
-   its contents have actually changed. */
-static FILETIME g_songs_mtime;
-
-/* The list and the shuffle cursor live across alarms now. find_mp3_files used to
-   be re-run - and re-shuffled from index 0 - on every single alarm, so even a
-   properly seeded rand() would have dealt a fresh deck each morning and always
-   started it from the top. */
-static BOOL ensure_mp3_files(AppState *s) {
+/* The list and the shuffle cursor live across alarms, so consecutive alarms
+   walk the deck instead of re-cutting it. */
+static BOOL ensure_tracks(AppState *s) {
     TCHAR dir[MAX_PATH];
     WIN32_FILE_ATTRIBUTE_DATA fad;
     BOOL haveStamp = FALSE;
@@ -120,182 +143,78 @@ static BOOL ensure_mp3_files(AppState *s) {
     if (SUCCEEDED(StringCchPrintfW(dir, MAX_PATH, L"%s\\songs", s->exe_dir)) &&
         GetFileAttributesExW(dir, GetFileExInfoStandard, &fad)) {
         haveStamp = TRUE;
-        if (g_mp3_count > 0 && CompareFileTime(&fad.ftLastWriteTime, &g_songs_mtime) == 0)
+        if (g_count > 0 && CompareFileTime(&fad.ftLastWriteTime, &g_songs_mtime) == 0)
             return TRUE;
     }
 
-    if (!find_mp3_files(s)) return FALSE;
+    if (!scan_tracks(s)) return FALSE;
     if (haveStamp) g_songs_mtime = fad.ftLastWriteTime;
     return TRUE;
 }
 
-static void set_mp3_volume(int mciVol) {
-    WCHAR cmd[64];
-    wsprintfW(cmd, L"setaudio alarm_mp3 volume to %d", mciVol);
-    mciSendStringW(cmd, NULL, 0, NULL);
+/* Walks the shuffle until something actually opens. A track that will not
+   decode is skipped rather than being allowed to end the alarm in silence. */
+static BOOL play_next_track(AppState *s) {
+    for (int tried = 0; tried < g_count; tried++) {
+        if (g_index >= g_count) shuffle_tracks();
+        const WCHAR *path = g_tracks[g_index++];
+        if (path && audio_play_file(path, s->hMainWnd)) return TRUE;
+    }
+    return FALSE;
 }
 
-static void play_mp3_next(AppState *s) {
-    mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);
-
-    if (g_mp3_count == 0) return;
-
-    if (g_mp3_index >= g_mp3_count) {
-        shuffle_mp3s();
-    }
-
-    TCHAR cmd[MAX_PATH + 64];
-    if (FAILED(StringCchPrintfW(cmd, ARRAYSIZE(cmd),
-                                L"open \"%s\" type mpegvideo alias alarm_mp3",
-                                g_mp3_paths[g_mp3_index])))
-        return;
-    if (mciSendStringW(cmd, NULL, 0, NULL) == 0) {
-        /* Only open at the ramp floor while a crescendo is actually still
-           climbing. Once it has finished, later tracks start at full volume
-           rather than being pinned at 10% for the rest of the alarm. */
-        BOOL ramping = s->crescendo && !s->sound_preview && !g_crescendo_done;
-        set_mp3_volume(ramping ? CRESCENDO_FLOOR : mp3_target_volume(s));
-        mciSendStringW(L"play alarm_mp3 notify", NULL, 0, s->hMainWnd);
-        g_mp3_index++;
-    }
-}
-
-/* Returns TRUE if a stop arrived while waiting. Every Sleep in these threads
-   went through here: the crescendo slept a whole second between checks, and a
-   dismiss sat blocked on the UI thread for that long waiting to be noticed.
-   Beep() itself still blocks for its own duration and cannot be interrupted. */
-static BOOL sound_wait(AppState *s, DWORD ms) {
-    if (s->hStopEvent)
-        return WaitForSingleObject(s->hStopEvent, ms) == WAIT_OBJECT_0;
-    Sleep(ms);
-    return s->stop_sound != 0;
-}
-
-static DWORD WINAPI cresendo_thread(LPVOID param) {
-    AppState *s = (AppState *)param;
-
-    /* Ramps to the volume the user chose, not to 100%. */
-    int target = mp3_target_volume(s);
-    if (target < CRESCENDO_FLOOR) target = CRESCENDO_FLOOR;
-
-    for (int step = 0; step < 15 && !s->stop_sound; step++) {
-        set_mp3_volume(CRESCENDO_FLOOR + (target - CRESCENDO_FLOOR) * step / 14);
-        if (sound_wait(s, 1000)) break;
-    }
-    if (!s->stop_sound) set_mp3_volume(target);
-    g_crescendo_done = TRUE;
-    return 0;
-}
-
-static DWORD WINAPI sound_preview_thread(LPVOID param) {
-    AppState *s = (AppState *)param;
-    if (sound_wait(s, 3000)) return 0;
-
-    if (s->sound_preview && !s->stop_sound && s->hMainWnd) {
-        PostMessageW(s->hMainWnd, WM_SOUND_PREVIEW_DONE, 0, 0);
-    }
-    return 0;
-}
-
-static DWORD WINAPI sound_simple_thread(LPVOID param) {
-    AppState *s = (AppState *)param;
-
-    if (s->sound_preview) {
-        for (int i = 0; i < 6 && !s->stop_sound; i++) {
-            Beep(1000, 200);
-            if (sound_wait(s, 80)) return 0;
-            Beep(1200, 200);
-            if (sound_wait(s, 300)) return 0;
-        }
-        return 0;
-    }
-
-    if (s->crescendo) {
-        for (int step = 0; step < 15 && !s->stop_sound; step++) {
-            Beep(600 + step * 40, 200 + step * 20);
-            if (sound_wait(s, 80)) return 0;
-            Beep(800 + step * 30, 200 + step * 20);
-            if (sound_wait(s, step < 8 ? 0 : 500)) return 0;
-        }
-    }
-
-    while (!s->stop_sound) {
-        Beep(1000, 200); if (s->stop_sound) break;
-        if (sound_wait(s, 80)) break;
-        Beep(1200, 200); if (s->stop_sound) break;
-        if (sound_wait(s, 500)) break;
-    }
-    /* Deliberately does not clear stop_sound: only the stopper owns that flag.
-       Clearing it here could cancel a stop aimed at the crescendo thread, or
-       one aimed at a sound that has only just started. */
-    return 0;
-}
-
-static void wait_and_close_thread(HANDLE *thread_handle) {
-    if (!thread_handle || !*thread_handle) {
-        return;
-    }
-
-    DWORD thread_id = GetThreadId(*thread_handle);
-    if (thread_id != 0 && thread_id != GetCurrentThreadId()) {
-        WaitForSingleObject(*thread_handle, 3000);
-    }
-    CloseHandle(*thread_handle);
-    *thread_handle = NULL;
-}
+/* ---------- public API ---------- */
 
 void sound_play_alarm(AppState *s) {
-    /* Cleared here rather than in the simple-tone branch below: the MP3 branch
-       returns before ever reaching that assignment, so a leftover TRUE from the
-       previous stop made the crescendo and preview threads exit immediately. */
-    if (!s->hStopEvent)
-        s->hStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);   /* manual reset */
-    if (s->hStopEvent) ResetEvent(s->hStopEvent);
-    InterlockedExchange(&s->stop_sound, FALSE);
-    g_crescendo_done = FALSE;
+    BOOL started = FALSE;
 
-    if (s->sound_mode == SOUND_MP3) {
-        if (ensure_mp3_files(s)) {
-            play_mp3_next(s);
-            if (s->crescendo && !s->sound_preview) {
-                s->hCrescendoThread = CreateThread(NULL, 0, cresendo_thread, s, 0, NULL);
-            }
-            if (s->sound_preview) {
-                s->hPreviewThread = CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
-            }
-            return;
-        }
+    if (s->sound_mode == SOUND_MP3 && ensure_tracks(s))
+        started = play_next_track(s);
+
+    /* An empty songs folder, or one where nothing will decode, still has to
+       wake somebody up. */
+    if (!started) started = audio_play_tone(s->hMainWnd);
+    if (!started) return;
+
+    float target = target_gain(s);
+    if (s->crescendo && !s->sound_preview) {
+        audio_ramp_gain(CRESCENDO_FLOOR * target, target, CRESCENDO_MS);
+        g_crescendo_end = GetTickCount64() + CRESCENDO_MS;
+    } else {
+        audio_set_gain(target);
+        g_crescendo_end = 0;
     }
 
-    s->hSoundThread = CreateThread(NULL, 0, sound_simple_thread, s, 0, NULL);
-    if (s->sound_preview) {
-        s->hPreviewThread = CreateThread(NULL, 0, sound_preview_thread, s, 0, NULL);
-    }
+    /* A timer on the main window, rather than a thread whose only job was to
+       sleep and post one message. */
+    if (s->sound_preview && s->hMainWnd)
+        SetTimer(s->hMainWnd, TIMER_SOUND_PREVIEW, PREVIEW_MS, NULL);
 }
 
 void sound_stop_alarm(AppState *s) {
-
-    InterlockedExchange(&s->stop_sound, TRUE);
-    if (s->hStopEvent) SetEvent(s->hStopEvent);
+    if (s->hMainWnd) KillTimer(s->hMainWnd, TIMER_SOUND_PREVIEW);
     s->sound_preview = FALSE;
-
-    wait_and_close_thread(&s->hSoundThread);
-    wait_and_close_thread(&s->hCrescendoThread);
-    wait_and_close_thread(&s->hPreviewThread);
-
-    mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);
-    /* The playlist deliberately survives a stop, so the next alarm carries on
-       through the shuffle instead of restarting it. sound_cleanup frees it. */
+    g_crescendo_end  = 0;
+    audio_stop();
 }
 
-void sound_on_mci_notify(AppState *s) {
-    if (s->alarm_active && s->sound_mode == SOUND_MP3) {
-        play_mp3_next(s);
-    }
+void sound_on_track_done(AppState *s) {
+    if (!s->alarm_active || s->sound_mode != SOUND_MP3) return;
+
+    float carried = audio_get_gain();
+    if (!play_next_track(s)) return;
+
+    /* Starting a track resets the gain state, so a crescendo is resumed for
+       whatever is left of it rather than dropping back to the floor. */
+    ULONGLONG now = GetTickCount64();
+    if (g_crescendo_end > now)
+        audio_ramp_gain(carried, target_gain(s), (DWORD)(g_crescendo_end - now));
+    else
+        audio_set_gain(target_gain(s));
 }
 
 void sound_cleanup(AppState *s) {
-    free_mp3_paths();
+    (void)s;
+    free_tracks();
     ZeroMemory(&g_songs_mtime, sizeof(g_songs_mtime));
-    if (s->hStopEvent) { CloseHandle(s->hStopEvent); s->hStopEvent = NULL; }
 }
