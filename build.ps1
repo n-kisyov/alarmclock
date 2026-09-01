@@ -132,7 +132,7 @@ if ($Compiled -gt 0 -or (Test-Stale $OutExe $LinkObjs)) {
     $ArgsLink = @("-o", $OutExe) + $LinkObjs + @(
         "-mwindows", "-O2",
         "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lgdiplus",
-        "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt"
+        "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt", "-lcomdlg32"
     )
     & $GccPath @ArgsLink
     if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }

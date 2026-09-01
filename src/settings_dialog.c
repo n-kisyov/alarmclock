@@ -106,34 +106,9 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         break;
     }
 
-    case WM_DRAWITEM: {
-        DRAWITEMSTRUCT *dis = (DRAWITEMSTRUCT *)lp;
-        if (!s || dis->CtlType != ODT_COMBOBOX) break;
-
-        TCHAR buf[8];
-        if (dis->itemID == (UINT)-1 ||
-            SendMessageW(dis->hwndItem, CB_GETLBTEXT, dis->itemID, (LPARAM)buf) == CB_ERR) {
-            buf[0] = 0;
-        }
-        BOOL isField = (dis->itemState & ODS_COMBOBOXEDIT) != 0;
-        COLORREF bg, fg;
-        if (dis->itemState & ODS_SELECTED && !isField) {
-            bg = s->accentColor; fg = RGB(255, 255, 255);
-        } else {
-            bg = isField ? s->panelBgColor : s->bgColor;
-            fg = s->textColor;
-        }
-        HBRUSH hBr = CreateSolidBrush(bg);
-        FillRect(dis->hDC, &dis->rcItem, hBr);
-        DeleteObject(hBr);
-        SetBkMode(dis->hDC, TRANSPARENT);
-        SetTextColor(dis->hDC, fg);
-        RECT rc = dis->rcItem; rc.left += 4;
-        DrawTextW(dis->hDC, buf, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        if ((dis->itemState & ODS_FOCUS) && !isField)
-            DrawFocusRect(dis->hDC, &dis->rcItem);
-        return TRUE;
-    }
+    case WM_DRAWITEM:
+        if (theme_draw_combo_item(s, (DRAWITEMSTRUCT *)lp)) return TRUE;
+        break;
 
     case WM_COMMAND:
         if (!s) break;

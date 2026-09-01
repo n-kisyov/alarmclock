@@ -49,7 +49,9 @@ static BOOL has_audio_extension(const WCHAR *name) {
 }
 
 static float target_gain(const AppState *s) {
-    int v = s->alarm_volume;
+    /* The ringing slot's own volume when it has one, the global setting
+       otherwise. A preview has no slot, so it lands on the global. */
+    int v = alarm_volume_for(s, s->ringing_alarm);
     if (v < 0)   v = 0;
     if (v > 100) v = 100;
     return (float)v / 100.0f;
@@ -167,8 +169,13 @@ static BOOL play_next_track(AppState *s) {
 
 void sound_play_alarm(AppState *s) {
     BOOL started = FALSE;
+    const WCHAR *own = s->sound_preview ? NULL : alarm_sound_for(s, s->ringing_alarm);
 
-    if (s->sound_mode == SOUND_MP3 && ensure_tracks(s))
+    /* This alarm's own sound wins, but only if it still opens - a file that has
+       been moved or deleted since it was chosen must not mean silence. */
+    if (own) started = audio_play_file(own, s->hMainWnd);
+
+    if (!started && s->sound_mode == SOUND_MP3 && ensure_tracks(s))
         started = play_next_track(s);
 
     /* An empty songs folder, or one where nothing will decode, still has to
@@ -199,10 +206,19 @@ void sound_stop_alarm(AppState *s) {
 }
 
 void sound_on_track_done(AppState *s) {
-    if (!s->alarm_active || s->sound_mode != SOUND_MP3) return;
+    if (!s->alarm_active) return;
 
+    const WCHAR *own = alarm_sound_for(s, s->ringing_alarm);
     float carried = audio_get_gain();
-    if (!play_next_track(s)) return;
+
+    /* A chosen file repeats; the shuffle moves on; the tone never ends by
+       itself and so never gets here. */
+    BOOL started;
+    if (own)                            started = audio_play_file(own, s->hMainWnd);
+    else if (s->sound_mode == SOUND_MP3) started = play_next_track(s);
+    else                                 return;
+
+    if (!started) return;
 
     /* Starting a track resets the gain state, so a crescendo is resumed for
        whatever is left of it rather than dropping back to the floor. */

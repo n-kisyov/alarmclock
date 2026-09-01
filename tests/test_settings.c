@@ -28,16 +28,17 @@ static void defaults(AppState *s) {
     s->snooze_minutes = 3;
     s->hour24 = TRUE;
     s->alarms_enabled = TRUE;
-    /* Matches WinMain: minute 0 is midnight, and a last_fire_min of 0 would
-       read as "already fired" and mute a 00:00 alarm. */
-    s->last_fire_min = -1;
+    s->last_fire_stamp = 0;
     s->ringing_alarm = -1;
     alarms_init(s);
 }
 
 static void st_set(SYSTEMTIME *st, WORD dow, WORD hour, WORD minute) {
     ZeroMemory(st, sizeof(*st));
-    st->wYear = 2026; st->wMonth = 9; st->wDay = 1;
+    st->wYear = 2026; st->wMonth = 9;
+    /* A distinct calendar day per weekday, so "the same time tomorrow" is a
+       genuinely different moment and not merely a different wDayOfWeek. */
+    st->wDay = (WORD)(1 + dow);
     st->wDayOfWeek = dow; st->wHour = hour; st->wMinute = minute;
 }
 
@@ -247,6 +248,63 @@ int main(void) {
         check("the disarm reached the file straight away",
               json_load_settings(&re, path) == SETTINGS_OK && re.alarms[1].enabled == FALSE);
     }
+
+    printf("\na repeating alarm rings again the next day\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    st_set(&st, 1, 7, 0);
+    check("rings on the first day", alarms_check(&s, &st, &idx) == TRUE);
+    s.alarm_active = FALSE;
+    st_set(&st, 2, 7, 0);
+    check("rings again at the same time tomorrow", alarms_check(&s, &st, &idx) == TRUE);
+
+    printf("\nper-alarm overrides round trip\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0; s.alarms[0].enabled = TRUE;
+    lstrcpyW(s.alarms[0].sound, L"C:\\music\\wake up.flac");
+    s.alarms[0].volume = 40;
+    s.alarms[0].snooze_minutes = 20;
+    s.alarms[0].skip_next = TRUE;
+    s.alarms[1].hour = 8; s.alarms[1].minute = 0; s.alarms[1].enabled = TRUE;
+    check("save succeeds", json_save_settings(&s, path));
+    {
+        AppState po; defaults(&po);
+        check("load succeeds", json_load_settings(&po, path) == SETTINGS_OK);
+        check("per-alarm sound survived",
+              lstrcmpW(po.alarms[0].sound, L"C:\\music\\wake up.flac") == 0);
+        check("per-alarm volume survived", po.alarms[0].volume == 40);
+        check("per-alarm snooze survived", po.alarms[0].snooze_minutes == 20);
+        check("skip_next survived", po.alarms[0].skip_next == TRUE);
+        check("an untouched slot keeps its inherit markers",
+              po.alarms[1].volume == -1 && po.alarms[1].snooze_minutes == -1 &&
+              po.alarms[1].sound[0] == 0 && po.alarms[1].skip_next == FALSE);
+
+        printf("\noverrides resolve against the globals\n");
+        po.alarm_volume = 80; po.snooze_minutes = 3;
+        check("a slot with its own volume uses it", alarm_volume_for(&po, 0) == 40);
+        check("a slot without one inherits", alarm_volume_for(&po, 1) == 80);
+        check("the timer has no slot and inherits", alarm_volume_for(&po, -1) == 80);
+        check("an out-of-range index inherits", alarm_volume_for(&po, MAX_ALARMS) == 80);
+        check("a slot with its own snooze uses it", alarm_snooze_for(&po, 0) == 20);
+        check("a slot without one inherits", alarm_snooze_for(&po, 1) == 3);
+        check("a slot with its own sound reports it", alarm_sound_for(&po, 0) != NULL);
+        check("a slot without one reports none", alarm_sound_for(&po, 1) == NULL);
+    }
+
+    printf("\nskip next occurrence\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    s.alarms[0].skip_next = TRUE;
+    st_set(&st, 1, 7, 0);
+    check("the skipped occurrence stays silent", alarms_check(&s, &st, &idx) == FALSE);
+    check("the skip is spent, not sticky", s.alarms[0].skip_next == FALSE);
+    check("the alarm stays armed", s.alarms[0].enabled == TRUE);
+    check("and does not ring later in that same minute",
+          alarms_check(&s, &st, &idx) == FALSE);
+    st_set(&st, 2, 7, 0);
+    check("the next occurrence rings normally", alarms_check(&s, &st, &idx) == TRUE);
 
     printf("\nnext-alarm distance\n");
     {

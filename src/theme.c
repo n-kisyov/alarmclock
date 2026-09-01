@@ -83,6 +83,40 @@ void theme_dialog_colors(HWND hDlg, AppState *s, HWND ctrl, HDC hdc) {
     }
 }
 
+/* An owner-drawn combo is the only way to get a dark drop-down, and the
+   settings and alarm dialogs both need identical painting - so it lives here
+   rather than being written out twice. Items are short, fixed strings, which is
+   what makes the buffer safe: CB_GETLBTEXT takes no length. */
+BOOL theme_draw_combo_item(AppState *s, DRAWITEMSTRUCT *dis) {
+    if (!s || dis->CtlType != ODT_COMBOBOX) return FALSE;
+
+    WCHAR buf[64];
+    if (dis->itemID == (UINT)-1 ||
+        SendMessageW(dis->hwndItem, CB_GETLBTEXT, dis->itemID, (LPARAM)buf) == CB_ERR) {
+        buf[0] = 0;
+    }
+
+    BOOL isField = (dis->itemState & ODS_COMBOBOXEDIT) != 0;
+    COLORREF bg, fg;
+    if ((dis->itemState & ODS_SELECTED) && !isField) {
+        bg = s->accentColor; fg = RGB(255, 255, 255);
+    } else {
+        bg = isField ? s->panelBgColor : s->bgColor;
+        fg = s->textColor;
+    }
+
+    HBRUSH hBr = CreateSolidBrush(bg);
+    FillRect(dis->hDC, &dis->rcItem, hBr);
+    DeleteObject(hBr);
+    SetBkMode(dis->hDC, TRANSPARENT);
+    SetTextColor(dis->hDC, fg);
+    RECT rc = dis->rcItem; rc.left += 4;
+    DrawTextW(dis->hDC, buf, -1, &rc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    if ((dis->itemState & ODS_FOCUS) && !isField)
+        DrawFocusRect(dis->hDC, &dis->rcItem);
+    return TRUE;
+}
+
 void theme_dialog_init(HWND hDlg, AppState *s) {
     theme_apply(hDlg, s->dark_mode);
 

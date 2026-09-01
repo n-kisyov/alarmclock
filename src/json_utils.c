@@ -343,8 +343,9 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
                 Alarm discard;
                 Alarm *a = (idx < MAX_ALARMS) ? &t->alarms[idx] : &discard;
                 if (a == &discard) {
+                    ZeroMemory(&discard, sizeof(discard));
                     a->hour = ALARM_UNSET; a->minute = ALARM_UNSET;
-                    a->enabled = FALSE; a->label[0] = 0; a->repeat_days = 0;
+                    a->volume = -1; a->snooze_minutes = -1;
                 }
 
                 BOOL hasRepeatDays = FALSE;
@@ -363,6 +364,10 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
                     else if (lstrcmp(akey, L"minute") == 0) json_read_int(&r, &a->minute);
                     else if (lstrcmp(akey, L"enabled") == 0) json_read_bool(&r, &a->enabled);
                     else if (lstrcmp(akey, L"label") == 0) { TCHAR lb[32]; if (json_read_string(&r, lb, 32)) lstrcpynW(a->label, lb, 32); }
+                    else if (lstrcmp(akey, L"sound") == 0) { TCHAR sp[MAX_PATH]; if (json_read_string(&r, sp, MAX_PATH)) lstrcpynW(a->sound, sp, MAX_PATH); }
+                    else if (lstrcmp(akey, L"volume") == 0) { int av; if (json_read_int(&r, &av)) a->volume = (av >= 10 && av <= 100) ? av : -1; }
+                    else if (lstrcmp(akey, L"snooze_minutes") == 0) { int sm; if (json_read_int(&r, &sm)) a->snooze_minutes = (sm >= 1 && sm <= 60) ? sm : -1; }
+                    else if (lstrcmp(akey, L"skip_next") == 0) json_read_bool(&r, &a->skip_next);
                     else if (lstrcmp(akey, L"repeat_days") == 0) { int rd; if (json_read_int(&r, &rd)) { a->repeat_days = (BYTE)rd; hasRepeatDays = TRUE; } }
                     else if (lstrcmp(akey, L"repeat") == 0) {
                         int rm;
@@ -390,6 +395,7 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
                     a->hour = ALARM_UNSET;
                     a->minute = ALARM_UNSET;
                     a->enabled = FALSE;
+                    a->skip_next = FALSE;
                 }
 
                 idx++;
@@ -486,8 +492,15 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
             s->alarms[i].hour, s->alarms[i].minute,
             s->alarms[i].enabled ? L"true" : L"false")) goto cleanup;
         if (!sb_append_json_escaped(&sb, s->alarms[i].label)) goto cleanup;
-        if (!sb_append_format(&sb, L", \"repeat_days\": %d}%s\n",
+        if (!sb_append_format(&sb,
+            L", \"repeat_days\": %d, \"volume\": %d, "
+            L"\"snooze_minutes\": %d, \"skip_next\": %s, \"sound\": ",
             (int)s->alarms[i].repeat_days,
+            s->alarms[i].volume,
+            s->alarms[i].snooze_minutes,
+            s->alarms[i].skip_next ? L"true" : L"false")) goto cleanup;
+        if (!sb_append_json_escaped(&sb, s->alarms[i].sound)) goto cleanup;
+        if (!sb_append_format(&sb, L"}%s\n",
             (i < MAX_ALARMS - 1) ? L"," : L"")) goto cleanup;
     }
 

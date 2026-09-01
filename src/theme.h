@@ -8,5 +8,6 @@ void theme_apply(HWND hwnd, BOOL dark);
 void theme_update_colors(AppState *s);
 void theme_dialog_colors(HWND hDlg, AppState *s, HWND ctrl, HDC hdc);
 void theme_dialog_init(HWND hDlg, AppState *s);
+BOOL theme_draw_combo_item(AppState *s, DRAWITEMSTRUCT *dis);
 
 #endif

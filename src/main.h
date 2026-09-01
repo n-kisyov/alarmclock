@@ -31,6 +31,13 @@ typedef struct {
     BOOL  enabled;
     WCHAR label[32];
     BYTE  repeat_days;
+
+    /* Per-alarm overrides. -1 and an empty path mean "follow the global
+       setting", so an alarm only differs where it was asked to. */
+    WCHAR sound[MAX_PATH];
+    int   volume;            /* -1 = global */
+    int   snooze_minutes;    /* -1 = global */
+    BOOL  skip_next;         /* consumed and cleared at the next occurrence */
 } Alarm;
 
 typedef struct {
@@ -54,7 +61,11 @@ typedef struct {
 
     BOOL     alarm_active;
     int      ringing_alarm;      /* slot that is ringing; -1 when it is the timer */
-    int      last_fire_min;
+    /* A whole timestamp in minutes, not a minute of the day. This used to hold
+       0..1439, so once a 07:00 alarm had fired the value stayed 420 and every
+       later 07:00 - tomorrow's, and every day after that - compared equal and
+       was suppressed: a repeating alarm rang exactly once per run of the app. */
+    ULONGLONG last_fire_stamp;
     ULONGLONG alarm_started_ms;  /* for the maximum ring duration */
     int      auto_snooze_count;
 
@@ -112,6 +123,7 @@ void   theme_dialog_init(HWND hDlg, AppState *s);
 void   alarms_init(AppState *s);
 BOOL   alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index);
 BOOL   alarms_next_delta_minutes(const SYSTEMTIME *st, const Alarm *a, int *delta_minutes);
+ULONGLONG alarms_minute_stamp(const SYSTEMTIME *st);
 
 void   clock_init(void);
 void   clock_cleanup(void);
@@ -150,6 +162,28 @@ static inline void cd_clamp(AppState *s) {
     if (s->cd_mins  > 59) s->cd_mins = 59;
     if (s->cd_secs  < 0)  s->cd_secs = 0;
     if (s->cd_secs  > 59) s->cd_secs = 59;
+}
+
+/* Per-alarm overrides resolve here so the "-1 means global" rule lives in one
+   place rather than at every call site. idx is the ringing slot, or -1 for the
+   countdown timer, which has no slot of its own. */
+static inline int alarm_volume_for(const AppState *s, int idx) {
+    if (idx >= 0 && idx < MAX_ALARMS && s->alarms[idx].volume >= 0)
+        return s->alarms[idx].volume;
+    return s->alarm_volume;
+}
+
+static inline int alarm_snooze_for(const AppState *s, int idx) {
+    if (idx >= 0 && idx < MAX_ALARMS && s->alarms[idx].snooze_minutes > 0)
+        return s->alarms[idx].snooze_minutes;
+    return s->snooze_minutes;
+}
+
+/* NULL when this alarm has no sound of its own. */
+static inline const WCHAR *alarm_sound_for(const AppState *s, int idx) {
+    if (idx >= 0 && idx < MAX_ALARMS && s->alarms[idx].sound[0])
+        return s->alarms[idx].sound;
+    return NULL;
 }
 
 static inline int cd_total_ms(const AppState *s) {

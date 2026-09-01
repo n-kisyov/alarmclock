@@ -9,6 +9,10 @@ void alarms_init(AppState *s) {
         s->alarms[i].enabled     = FALSE;
         s->alarms[i].label[0]    = 0;
         s->alarms[i].repeat_days = 0;
+        s->alarms[i].sound[0]    = 0;
+        s->alarms[i].volume         = -1;   /* -1: follow the global setting */
+        s->alarms[i].snooze_minutes = -1;
+        s->alarms[i].skip_next      = FALSE;
     }
 }
 
@@ -42,13 +46,26 @@ BOOL alarms_next_delta_minutes(const SYSTEMTIME *st, const Alarm *a, int *delta_
     return FALSE;
 }
 
+/* Whole minutes since the FILETIME epoch, so "the same minute" means the same
+   minute of the same day rather than the same time on any day. */
+ULONGLONG alarms_minute_stamp(const SYSTEMTIME *st) {
+    FILETIME ft;
+    if (!SystemTimeToFileTime(st, &ft)) return 0;
+    ULARGE_INTEGER u;
+    u.LowPart  = ft.dwLowDateTime;
+    u.HighPart = ft.dwHighDateTime;
+    return u.QuadPart / 600000000ULL;      /* 100ns ticks in one minute */
+}
+
 BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
     if (out_index) *out_index = -1;
 
     if (!s->alarms_enabled || s->alarm_active) return FALSE;
 
-    int nowMin = (int)st->wHour * 60 + (int)st->wMinute;
-    if (nowMin == s->last_fire_min) return FALSE;
+    /* Zero means "no fire recorded", and also what a failed conversion returns,
+       so it never suppresses anything. */
+    ULONGLONG stamp = alarms_minute_stamp(st);
+    if (stamp != 0 && stamp == s->last_fire_stamp) return FALSE;
 
     /* Every slot, not just the displayed ones: alarm_count is a display
        preference, and lowering it used to strand enabled alarms as invisible
@@ -63,7 +80,21 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
         if (s->alarms[i].repeat_days != 0) {
             int dayBit = 1 << st->wDayOfWeek;
             if (!(s->alarms[i].repeat_days & dayBit)) continue;
-        } else {
+        }
+
+        if (s->alarms[i].skip_next) {
+            /* Spend the skip on this occurrence and clear it. The minute is
+               stamped exactly as a real fire would stamp it, because otherwise
+               the flag is gone and the very next tick inside this same minute
+               would ring the alarm we were asked to skip. */
+            s->alarms[i].skip_next = FALSE;
+            if (s->alarms[i].repeat_days == 0) s->alarms[i].enabled = FALSE;
+            s->last_fire_stamp = stamp;
+            settings_save(s);
+            return FALSE;
+        }
+
+        if (s->alarms[i].repeat_days == 0) {
             /* A one-shot alarm disarms itself. Persist that now rather than
                waiting for the save on exit, so killing the process does not
                leave it armed for tomorrow. */
@@ -72,7 +103,7 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
         }
 
         s->alarm_active = TRUE;
-        s->last_fire_min = nowMin;
+        s->last_fire_stamp = stamp;
         if (out_index) *out_index = i;
         return TRUE;
     }

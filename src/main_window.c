@@ -324,7 +324,7 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
             SelectObject(hdc, hOld);
         }
 
-        TCHAR timeStr[64];
+        TCHAR timeStr[96];
         if (s->alarms[i].hour >= 0 && s->alarms[i].minute >= 0) {
             int h = s->alarms[i].hour;
             const WCHAR *ap = L"";
@@ -334,12 +334,17 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
             }
             /* The suffix carries its own leading space, so 24-hour rows no
                longer render with a double space and a trailing one. */
+            /* Markers, so a row that departs from the global settings says so
+               instead of looking identical to one that does not. */
+            const WCHAR *note = s->alarms[i].sound[0]  ? L"  \x266A" : L"";
+            const WCHAR *skip = s->alarms[i].skip_next ? L"  (skip next)" : L"";
+
             if (s->alarms[i].label[0])
-                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s  %s",
-                                 h, s->alarms[i].minute, ap, s->alarms[i].label);
+                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s  %s%s%s",
+                                 h, s->alarms[i].minute, ap, s->alarms[i].label, note, skip);
             else
-                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s",
-                                 h, s->alarms[i].minute, ap);
+                StringCchPrintfW(timeStr, ARRAYSIZE(timeStr), L"%02d:%02d%s%s%s",
+                                 h, s->alarms[i].minute, ap, note, skip);
         } else {
             lstrcpy(timeStr, L"--:--");
         }
@@ -601,7 +606,7 @@ static void mode_action(HWND hwnd, ModeButtonId hit) {
 
 static void snooze_alarm(void) {
     AppState *s = &g_state;
-    s->snooze_total_sec = s->snooze_minutes * 60;
+    s->snooze_total_sec = alarm_snooze_for(s, s->ringing_alarm) * 60;
     s->snooze_end_ms = GetTickCount64() + (ULONGLONG)s->snooze_total_sec * 1000ULL;
     s->snooze_pending = TRUE;
     s->alarm_active = FALSE;
@@ -862,6 +867,10 @@ static void edit_alarm(HWND hwnd, int i) {
     data.enabled     = g_state.alarms[i].enabled;
     data.repeat_days = g_state.alarms[i].repeat_days;
     lstrcpyW(data.label, g_state.alarms[i].label);
+    lstrcpynW(data.sound, g_state.alarms[i].sound, MAX_PATH);
+    data.volume         = g_state.alarms[i].volume;
+    data.snooze_minutes = g_state.alarms[i].snooze_minutes;
+    data.skip_next      = g_state.alarms[i].skip_next;
 
     if (DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_ALARM),
                         hwnd, alarm_dlg_proc, (LPARAM)&data) == IDOK) {
@@ -870,6 +879,10 @@ static void edit_alarm(HWND hwnd, int i) {
         g_state.alarms[i].enabled     = data.enabled;
         g_state.alarms[i].repeat_days = data.repeat_days;
         lstrcpyW(g_state.alarms[i].label, data.label);
+        lstrcpynW(g_state.alarms[i].sound, data.sound, MAX_PATH);
+        g_state.alarms[i].volume         = data.volume;
+        g_state.alarms[i].snooze_minutes = data.snooze_minutes;
+        g_state.alarms[i].skip_next      = data.skip_next;
         settings_save(&g_state);
         InvalidateRect(hwnd, NULL, FALSE);
     }
@@ -888,6 +901,10 @@ static void clear_alarm(HWND hwnd, int i) {
     g_state.alarms[i].enabled     = FALSE;
     g_state.alarms[i].repeat_days = 0;
     g_state.alarms[i].label[0]    = 0;
+    g_state.alarms[i].sound[0]    = 0;
+    g_state.alarms[i].volume         = -1;
+    g_state.alarms[i].snooze_minutes = -1;
+    g_state.alarms[i].skip_next      = FALSE;
     settings_save(&g_state);
     InvalidateRect(hwnd, NULL, FALSE);
 }
@@ -1261,7 +1278,7 @@ static void on_timer(HWND hwnd) {
         if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
             s->snooze_pending = FALSE;
             begin_alarm(s, FALSE);
-            s->last_fire_min = (int)st.wHour * 60 + (int)st.wMinute;
+            s->last_fire_stamp = alarms_minute_stamp(&st);
             sound_play_alarm(s);
             show_and_focus(hwnd);
         }
@@ -1402,10 +1419,10 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_TIMECHANGE:
-        /* A clock jump - manual change, timezone, DST - leaves last_fire_min
-           describing a minute that no longer relates to now, which can suppress
+        /* A clock jump - manual change, timezone, DST - leaves the stamp
+           describing a moment that no longer relates to now, which can suppress
            the next legitimate fire. */
-        g_state.last_fire_min = -1;
+        g_state.last_fire_stamp = 0;
         tray_update_tooltip(&g_state);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;

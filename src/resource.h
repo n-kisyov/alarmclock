@@ -30,6 +30,10 @@
 #define IDC_ALARM_ENABLED    303
 #define IDC_ALARM_LABEL      304
 #define IDC_ALARM_REPEAT     305
+#define IDC_ALARM_SOUND      306
+#define IDC_ALARM_SOUND_PICK 307
+#define IDC_ALARM_SOUND_CLEAR 308
+#define IDC_ALARM_VOL        309
 #define IDC_DAY_SUN          310
 #define IDC_DAY_MON          311
 #define IDC_DAY_TUE          312
@@ -39,6 +43,8 @@
 #define IDC_DAY_SAT          316
 #define IDC_DAY_ALL          317
 #define IDC_DAY_NONE         318
+#define IDC_ALARM_SNOOZE     320
+#define IDC_ALARM_SKIP       321
 
 #define IDD_COUNTDOWN_SET    400
 #define IDC_CD_HOURS         401
