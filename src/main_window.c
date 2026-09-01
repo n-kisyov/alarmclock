@@ -8,7 +8,12 @@
 #include "clock_renderer.h"
 #include "sound.h"
 #include "settings_data.h"
+#include "power.h"
 #include <strsafe.h>
+
+/* Coming back after a week away should not set off an alarm for a Tuesday that
+   is long past, so the catch-up walk only looks back this far. */
+#define CATCHUP_MAX_MINUTES  (12 * 60)
 
 /* Layout constants are authored at 96 dpi and scaled through S() at the point
    of use. The manifest claims PerMonitorV2, which tells Windows not to scale
@@ -378,7 +383,7 @@ static void snooze_alarm(void);
 static void dismiss_alarm(void);
 static void show_and_focus(HWND hwnd);
 static UINT timer_interval(const AppState *s);
-static void show_alarm_balloon(AppState *s, int idx);
+static void show_alarm_balloon(AppState *s, int idx, const SYSTEMTIME *missedAt);
 
 /* ---------- mode action bar ----------
 
@@ -641,6 +646,7 @@ static void snooze_alarm(void) {
     s->snooze_end_ms = GetTickCount64() + (ULONGLONG)s->snooze_total_sec * 1000ULL;
     s->snooze_pending = TRUE;
     s->alarm_active = FALSE;
+    power_keep_awake(FALSE);
     sound_stop_alarm(s);
     InvalidateRect(s->hMainWnd, NULL, FALSE);
 }
@@ -651,6 +657,7 @@ static void dismiss_alarm(void) {
     s->snooze_pending = FALSE;
     s->auto_snooze_count = 0;
     s->ringing_alarm = -1;
+    power_keep_awake(FALSE);
     sound_stop_alarm(s);
     InvalidateRect(s->hMainWnd, NULL, FALSE);
 }
@@ -927,6 +934,7 @@ static void edit_alarm(HWND hwnd, int i) {
         g_state.alarms[i].snooze_minutes = data.snooze_minutes;
         g_state.alarms[i].skip_next      = data.skip_next;
         settings_save(&g_state);
+        power_arm_wake_timer(&g_state);
         InvalidateRect(hwnd, NULL, FALSE);
     }
 }
@@ -1150,6 +1158,7 @@ static void on_command(HWND hwnd, WPARAM wp) {
     case IDM_SETTINGS:
         if (DialogBoxParamW(GetModuleHandle(NULL), MAKEINTRESOURCEW(IDD_SETTINGS), hwnd, settings_dlg_proc, (LPARAM)s) == IDOK) {
             settings_save(s);
+            power_arm_wake_timer(s);
             InvalidateRect(hwnd, NULL, FALSE);
         }
         break;
@@ -1236,6 +1245,30 @@ static void begin_alarm(AppState *s, BOOL fresh) {
     s->alarm_active     = TRUE;
     s->alarm_started_ms = GetTickCount64();
     if (fresh) s->auto_snooze_count = 0;
+    /* Nothing is more useless than an alarm that lets the machine drop back to
+       sleep halfway through ringing. */
+    power_keep_awake(TRUE);
+}
+
+/* Rings whatever came due while the machine was asleep or the app was not
+   running. Always raises the balloon, visible window or not: an alarm that has
+   already happened has to say when, and the window alone does not carry that. */
+static void check_missed_alarms(HWND hwnd) {
+    AppState *s = &g_state;
+
+    SYSTEMTIME now;
+    GetLocalTime(&now);
+
+    int idx = -1;
+    SYSTEMTIME when;
+    if (!alarms_catch_up(s, alarms_minute_stamp(&now), CATCHUP_MAX_MINUTES, &idx, &when))
+        return;
+
+    begin_alarm(s, TRUE);
+    s->ringing_alarm = idx;
+    sound_play_alarm(s);
+    show_and_focus(hwnd);
+    show_alarm_balloon(s, idx, &when);
 }
 
 /* Runs off the timer, not the paint, so the countdown keeps running - and still
@@ -1264,7 +1297,7 @@ static void tick_countdown(void) {
             if (s->hMainWnd) show_and_focus(s->hMainWnd);
 
             /* A timer finishing while hidden was silent in the tray. */
-            if (wasInBackground) show_alarm_balloon(s, -1);
+            if (wasInBackground) show_alarm_balloon(s, -1, NULL);
         }
     }
 }
@@ -1273,15 +1306,19 @@ static void tick_countdown(void) {
    hour and minute matched the clock, ignoring enabled and repeat_days, so with
    two alarms set to the same time it could name the wrong one - or a disabled
    one - even though alarms_check already knew which had fired. */
-static void show_alarm_balloon(AppState *s, int idx) {
+static void show_alarm_balloon(AppState *s, int idx, const SYSTEMTIME *missedAt) {
     s->nid.uFlags |= NIF_INFO;
     s->nid.dwInfoFlags = NIIF_USER;
     lstrcpyW(s->nid.szInfoTitle, L"AlarmClock");
     s->nid.szInfo[0] = 0;
     if (idx >= 0 && idx < MAX_ALARMS) {
-        wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
-                  s->alarms[idx].hour, s->alarms[idx].minute,
-                  s->alarms[idx].label[0] ? s->alarms[idx].label : L"Alarm");
+        const WCHAR *label = s->alarms[idx].label[0] ? s->alarms[idx].label : L"Alarm";
+        if (missedAt)
+            wsprintfW(s->nid.szInfo, L"Missed %02d:%02d  %s",
+                      missedAt->wHour, missedAt->wMinute, label);
+        else
+            wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
+                      s->alarms[idx].hour, s->alarms[idx].minute, label);
     } else {
         lstrcpyW(s->nid.szInfo, L"Timer finished");
     }
@@ -1299,6 +1336,16 @@ static void on_timer(HWND hwnd) {
     GetLocalTime(&st);
     static int lastAlarmSec = -1;
     static int lastPaintedSec = -1;
+    static int lastSeenMin = -1;
+    static BOOL caughtUp = FALSE;
+
+    /* The first tick is the earliest point where the window, the tray and the
+       loaded settings all exist, which is what the catch-up needs. */
+    if (!caughtUp) {
+        caughtUp = TRUE;
+        check_missed_alarms(hwnd);
+        power_arm_wake_timer(s);
+    }
 
     tick_countdown();
 
@@ -1316,7 +1363,7 @@ static void on_timer(HWND hwnd) {
             sound_play_alarm(s);
             show_and_focus(hwnd);
 
-            if (wasInBackground) show_alarm_balloon(s, fired);
+            if (wasInBackground) show_alarm_balloon(s, fired, NULL);
         }
 
         if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
@@ -1328,6 +1375,15 @@ static void on_timer(HWND hwnd) {
         }
 
         tray_update_tooltip(s);
+    }
+
+    if ((int)st.wMinute != lastSeenMin) {
+        lastSeenMin = (int)st.wMinute;
+        /* Written every minute but only persisted by whatever save happens
+           next; if the process is killed in between, the gap simply looks a
+           little wider, which is the safe direction to be wrong in. */
+        s->last_seen_stamp = alarms_minute_stamp(&st);
+        power_arm_wake_timer(s);
     }
 
     if (s->sleep_running && GetTickCount64() >= s->sleep_end_ms) {
@@ -1401,6 +1457,12 @@ static void on_destroy(HWND hwnd) {
     KillTimer(hwnd, TIMER_CLOCK);
     sound_stop_alarm(s);
     sound_cleanup(s);
+    power_cleanup();
+
+    /* One last stamp, so a restart knows exactly how long it was away. */
+    SYSTEMTIME nowExit;
+    GetLocalTime(&nowExit);
+    s->last_seen_stamp = alarms_minute_stamp(&nowExit);
 
     capture_placement(hwnd, s);
     settings_save(s);
@@ -1465,15 +1527,27 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
            in on_destroy never ran: window geometry, mode and countdown were lost
            every time the machine was shut down. */
         if (wp) {
+            SYSTEMTIME nowEnd;
+            GetLocalTime(&nowEnd);
+            g_state.last_seen_stamp = alarms_minute_stamp(&nowEnd);
             capture_placement(hwnd, &g_state);
             settings_save(&g_state);
         }
         return 0;
+    case WM_POWERBROADCAST:
+        if (wp == PBT_APMRESUMEAUTOMATIC || wp == PBT_APMRESUMESUSPEND) {
+            /* Back from sleep: the schedule may well have gone by while the
+               machine was off, and the wake timer needs arming for the next. */
+            check_missed_alarms(hwnd);
+            power_arm_wake_timer(&g_state);
+        }
+        return TRUE;
     case WM_TIMECHANGE:
         /* A clock jump - manual change, timezone, DST - leaves the stamp
            describing a moment that no longer relates to now, which can suppress
            the next legitimate fire. */
         g_state.last_fire_stamp = 0;
+        power_arm_wake_timer(&g_state);
         tray_update_tooltip(&g_state);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;

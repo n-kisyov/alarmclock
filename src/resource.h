@@ -24,6 +24,7 @@
 #define IDC_ALARM_VOLUME     215
 #define IDC_PREVIEW_SOUND    216
 #define IDC_SLEEP_MINUTES    217
+#define IDC_WAKE_NOTE        218
 
 #define IDD_ALARM            300
 #define IDC_ALARM_HOUR       301

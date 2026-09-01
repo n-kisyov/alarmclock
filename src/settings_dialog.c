@@ -2,6 +2,7 @@
 #include "main.h"
 #include "theme.h"
 #include "sound.h"
+#include "power.h"
 
 static const TCHAR *snooze_items[] = {
     L"1", L"2", L"3", L"5", L"10", L"15", L"20", L"30"
@@ -81,6 +82,12 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             }
             SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
         }
+        /* An armed wake timer that Windows will never fire is the worst of both
+           worlds, so say so rather than let it fail silently at 7am. */
+        SetDlgItemTextW(hDlg, IDC_WAKE_NOTE,
+            power_wake_timers_allowed()
+                ? L""
+                : L"Windows has wake timers off: alarms will not wake this PC from sleep.");
         {
             HWND hCombo = GetDlgItem(hDlg, IDC_SLEEP_MINUTES);
             int sel = 1;                     /* 30 minutes */

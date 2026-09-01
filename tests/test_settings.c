@@ -306,6 +306,99 @@ int main(void) {
     st_set(&st, 2, 7, 0);
     check("the next occurrence rings normally", alarms_check(&s, &st, &idx) == TRUE);
 
+    printf("\nminute stamps round trip\n");
+    st_set(&st, 3, 14, 37);
+    {
+        SYSTEMTIME back;
+        check("stamp converts back", alarms_stamp_to_systemtime(alarms_minute_stamp(&st), &back));
+        check("to the same minute of the same day",
+              back.wHour == 14 && back.wMinute == 37 && back.wDay == st.wDay);
+    }
+
+    printf("\ncatching up an alarm missed while asleep\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[2].hour = 7; s.alarms[2].minute = 0;
+    s.alarms[2].enabled = TRUE; s.alarms[2].repeat_days = 0x7F;
+    { SYSTEMTIME seen; st_set(&seen, 1, 6, 30); s.last_seen_stamp = alarms_minute_stamp(&seen); }
+    st_set(&st, 1, 9, 0);
+    {
+        int mi = -1; SYSTEMTIME mw;
+        check("the missed 07:00 is found",
+              alarms_catch_up(&s, alarms_minute_stamp(&st), 12 * 60, &mi, &mw) == TRUE);
+        check("it names the right slot", mi == 2);
+        check("and the time it should have rung", mw.wHour == 7 && mw.wMinute == 0);
+        check("it is ringing now", s.alarm_active == TRUE);
+    }
+
+    printf("\nbut not one from days ago\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    { SYSTEMTIME seen; st_set(&seen, 1, 6, 30); s.last_seen_stamp = alarms_minute_stamp(&seen); }
+    st_set(&st, 4, 9, 0);
+    check("a gap past the cap catches nothing",
+          alarms_catch_up(&s, alarms_minute_stamp(&st), 12 * 60, &idx, NULL) == FALSE);
+    check("and nothing is ringing", s.alarm_active == FALSE);
+
+    printf("\nno gap means nothing to catch up\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    { SYSTEMTIME seen; st_set(&seen, 1, 7, 0); s.last_seen_stamp = alarms_minute_stamp(&seen); }
+    st_set(&st, 1, 7, 1);
+    check("the minute already seen is left to the live check",
+          alarms_catch_up(&s, alarms_minute_stamp(&st), 12 * 60, &idx, NULL) == FALSE);
+
+    printf("\na skip is spent even on an occurrence nobody heard\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 7; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    s.alarms[0].skip_next = TRUE;
+    { SYSTEMTIME seen; st_set(&seen, 1, 6, 30); s.last_seen_stamp = alarms_minute_stamp(&seen); }
+    st_set(&st, 1, 9, 0);
+    check("the skipped occurrence is not rung",
+          alarms_catch_up(&s, alarms_minute_stamp(&st), 12 * 60, &idx, NULL) == FALSE);
+    check("and the skip is spent", s.alarms[0].skip_next == FALSE);
+
+    printf("\na missed one-shot rings once, then disarms\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[5].hour = 8; s.alarms[5].minute = 15;
+    s.alarms[5].enabled = TRUE; s.alarms[5].repeat_days = 0;
+    { SYSTEMTIME seen; st_set(&seen, 1, 7, 0); s.last_seen_stamp = alarms_minute_stamp(&seen); }
+    st_set(&st, 1, 9, 0);
+    check("it rings", alarms_catch_up(&s, alarms_minute_stamp(&st), 12 * 60, &idx, NULL) == TRUE);
+    check("it names the right slot", idx == 5);
+    check("and disarms itself", s.alarms[5].enabled == FALSE);
+
+    printf("\nwhen to wake the machine\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    st_set(&st, 1, 10, 0);
+    check("nothing scheduled, nothing to wake for",
+          power_seconds_until_wake(&s, &st) < 0);
+
+    s.alarms[0].hour = 11; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    check("an hour out, less the lead time",
+          power_seconds_until_wake(&s, &st) == 60 * 60 - 20);
+
+    s.alarms[1].hour = 10; s.alarms[1].minute = 15;
+    s.alarms[1].enabled = TRUE; s.alarms[1].repeat_days = 0x7F;
+    check("the soonest alarm is the one that matters",
+          power_seconds_until_wake(&s, &st) == 15 * 60 - 20);
+
+    s.alarms[2].hour = 10; s.alarms[2].minute = 1;
+    s.alarms[2].enabled = TRUE; s.alarms[2].repeat_days = 0x7F;
+    check("one minute out still leaves a positive delay",
+          power_seconds_until_wake(&s, &st) == 40);
+
+    s.alarms_enabled = FALSE;
+    check("the master switch means no wake timer",
+          power_seconds_until_wake(&s, &st) < 0);
+    /* Not an assertion - it depends on the machine's power plan. Printed so a
+       run that behaves oddly around sleep says why. */
+    printf("  (Windows allows wake timers here: %s)\n",
+           power_wake_timers_allowed() ? "yes" : "no");
+
     printf("\nnext-alarm distance\n");
     {
         Alarm a; ZeroMemory(&a, sizeof(a));

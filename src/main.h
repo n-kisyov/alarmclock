@@ -66,6 +66,9 @@ typedef struct {
        later 07:00 - tomorrow's, and every day after that - compared equal and
        was suppressed: a repeating alarm rang exactly once per run of the app. */
     ULONGLONG last_fire_stamp;
+    /* The last minute the app was awake and watching. The gap between this and
+       now is what the catch-up walk covers. */
+    ULONGLONG last_seen_stamp;
     ULONGLONG alarm_started_ms;  /* for the maximum ring duration */
     int      auto_snooze_count;
 
@@ -130,6 +133,10 @@ void   alarms_init(AppState *s);
 BOOL   alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index);
 BOOL   alarms_next_delta_minutes(const SYSTEMTIME *st, const Alarm *a, int *delta_minutes);
 ULONGLONG alarms_minute_stamp(const SYSTEMTIME *st);
+BOOL   alarms_due_at(const Alarm *a, const SYSTEMTIME *st);
+BOOL   alarms_stamp_to_systemtime(ULONGLONG stamp, SYSTEMTIME *st);
+BOOL   alarms_catch_up(AppState *s, ULONGLONG nowStamp, int maxGapMinutes,
+                       int *out_index, SYSTEMTIME *out_when);
 
 void   clock_init(void);
 void   clock_cleanup(void);
@@ -151,6 +158,12 @@ BOOL   sound_start_sleep_timer(AppState *s);
 void   sound_stop_sleep_timer(AppState *s);
 
 void   autostart_update(AppState *s);
+
+BOOL   power_arm_wake_timer(AppState *s);
+BOOL   power_wake_timers_allowed(void);
+LONGLONG power_seconds_until_wake(const AppState *s, const SYSTEMTIME *now);
+void   power_keep_awake(BOOL awake);
+void   power_cleanup(void);
 
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);

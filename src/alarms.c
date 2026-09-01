@@ -57,6 +57,76 @@ ULONGLONG alarms_minute_stamp(const SYSTEMTIME *st) {
     return u.QuadPart / 600000000ULL;      /* 100ns ticks in one minute */
 }
 
+/* Would this alarm be due at exactly this minute? Shared by the live check and
+   the catch-up walk, so the two cannot drift apart. */
+BOOL alarms_due_at(const Alarm *a, const SYSTEMTIME *st) {
+    if (!a->enabled || a->hour == ALARM_UNSET) return FALSE;
+    if (a->hour != (int)st->wHour || a->minute != (int)st->wMinute) return FALSE;
+    if (a->repeat_days != 0 && !(a->repeat_days & (1 << st->wDayOfWeek))) return FALSE;
+    return TRUE;
+}
+
+BOOL alarms_stamp_to_systemtime(ULONGLONG stamp, SYSTEMTIME *st) {
+    ULARGE_INTEGER u;
+    u.QuadPart = stamp * 600000000ULL;
+
+    FILETIME ft;
+    ft.dwLowDateTime  = u.LowPart;
+    ft.dwHighDateTime = u.HighPart;
+    return FileTimeToSystemTime(&ft, st);
+}
+
+/* Rings the most recent alarm that came due while nobody was watching - the
+   machine asleep, or the app not running. alarms_check only ever sees the
+   minutes the process is actually ticking through, so without this an alarm
+   scheduled during sleep leaves no trace at all: it does not ring, and a
+   repeating one just waits silently for tomorrow.
+
+   The gap is capped, because coming back from a week away should not set off
+   an alarm for a Tuesday that is long past. */
+BOOL alarms_catch_up(AppState *s, ULONGLONG nowStamp, int maxGapMinutes,
+                     int *out_index, SYSTEMTIME *out_when) {
+    if (out_index) *out_index = -1;
+
+    if (!s->alarms_enabled || s->alarm_active) return FALSE;
+    if (s->last_seen_stamp == 0 || nowStamp <= s->last_seen_stamp) return FALSE;
+    if (nowStamp - s->last_seen_stamp > (ULONGLONG)maxGapMinutes) return FALSE;
+
+    int found = -1;
+    SYSTEMTIME when;
+    ZeroMemory(&when, sizeof(when));
+
+    /* The current minute is left to alarms_check, which is about to run anyway. */
+    for (ULONGLONG m = s->last_seen_stamp + 1; m < nowStamp; m++) {
+        SYSTEMTIME st;
+        if (!alarms_stamp_to_systemtime(m, &st)) continue;
+
+        for (int i = 0; i < MAX_ALARMS; i++) {
+            if (!alarms_due_at(&s->alarms[i], &st)) continue;
+
+            if (s->alarms[i].skip_next) {
+                /* The skip was meant for this occurrence, missed or not. */
+                s->alarms[i].skip_next = FALSE;
+                if (s->alarms[i].repeat_days == 0) s->alarms[i].enabled = FALSE;
+                continue;
+            }
+            /* Keep looking: the most recent missed alarm is the useful one. */
+            found = i;
+            when  = st;
+        }
+    }
+    if (found < 0) return FALSE;
+
+    if (s->alarms[found].repeat_days == 0) s->alarms[found].enabled = FALSE;
+    s->alarm_active    = TRUE;
+    s->last_fire_stamp = nowStamp;
+    settings_save(s);
+
+    if (out_index) *out_index = found;
+    if (out_when)  *out_when  = when;
+    return TRUE;
+}
+
 BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
     if (out_index) *out_index = -1;
 
@@ -71,16 +141,7 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
        preference, and lowering it used to strand enabled alarms as invisible
        and permanently silent. */
     for (int i = 0; i < MAX_ALARMS; i++) {
-        if (!s->alarms[i].enabled ||
-            s->alarms[i].hour != (int)st->wHour ||
-            s->alarms[i].minute != (int)st->wMinute ||
-            s->alarms[i].hour == ALARM_UNSET)
-            continue;
-
-        if (s->alarms[i].repeat_days != 0) {
-            int dayBit = 1 << st->wDayOfWeek;
-            if (!(s->alarms[i].repeat_days & dayBit)) continue;
-        }
+        if (!alarms_due_at(&s->alarms[i], st)) continue;
 
         if (s->alarms[i].skip_next) {
             /* Spend the skip on this occurrence and clear it. The minute is

@@ -322,6 +322,9 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
         else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm; if (json_read_int(&r, &sm) && sm >= 1 && sm <= 60) t->snooze_minutes = sm; }
         else if (lstrcmp(key, L"app_mode") == 0) { int am; if (json_read_int(&r, &am) && am >= 0 && am <= 2) t->app_mode = am; }
         else if (lstrcmp(key, L"sleep_minutes") == 0) { int sl; if (json_read_int(&r, &sl) && sl >= 1 && sl <= 240) t->sleep_minutes = sl; }
+        /* Minutes since the FILETIME epoch: about 223 million in this century,
+           so it sits comfortably inside an int for the next few thousand years. */
+        else if (lstrcmp(key, L"last_seen") == 0) { int ls; if (json_read_int(&r, &ls) && ls > 0) t->last_seen_stamp = (ULONGLONG)ls; }
         else if (lstrcmp(key, L"win_x") == 0) json_read_int(&r, &t->winX);
         else if (lstrcmp(key, L"win_y") == 0) json_read_int(&r, &t->winY);
         else if (lstrcmp(key, L"win_w") == 0) json_read_int(&r, &t->winW);
@@ -470,6 +473,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         L"  \"alarm_volume\": %d,\n"
         L"  \"snooze_minutes\": %d,\n"
         L"  \"sleep_minutes\": %d,\n"
+        L"  \"last_seen\": %d,\n"
         L"  \"app_mode\": %d,\n"
         L"  \"win_x\": %d,\n"
         L"  \"win_y\": %d,\n"
@@ -484,7 +488,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         s->alarms_enabled ? L"true" : L"false", s->alarm_count,
         s->alarms_collapsed ? L"true" : L"false",
         s->alarm_volume,
-        s->snooze_minutes, s->sleep_minutes, s->app_mode,
+        s->snooze_minutes, s->sleep_minutes, (int)s->last_seen_stamp, s->app_mode,
         s->winX, s->winY, s->winW, s->winH,
         s->sound_mode == SOUND_MP3 ? L"mp3" : L"simple",
         s->cd_hours, s->cd_mins, s->cd_secs)) goto cleanup;

@@ -100,7 +100,8 @@ $Sources = @(
     "settings_data.c",
     "json_utils.c",
     "sound.c",
-    "audio.c"
+    "audio.c",
+    "power.c"
 )
 
 Write-Host "Compiling source files..." -ForegroundColor Cyan
@@ -132,7 +133,8 @@ if ($Compiled -gt 0 -or (Test-Stale $OutExe $LinkObjs)) {
     $ArgsLink = @("-o", $OutExe) + $LinkObjs + @(
         "-mwindows", "-O2",
         "-lcomctl32", "-lgdi32", "-lshell32", "-ldwmapi", "-lwinmm", "-luxtheme", "-lgdiplus",
-        "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt", "-lcomdlg32"
+        "-lmfplat", "-lmfreadwrite", "-lmfuuid", "-lole32", "-lavrt", "-lcomdlg32",
+        "-lpowrprof"
     )
     & $GccPath @ArgsLink
     if ($LASTEXITCODE -ne 0) { Write-Error "Linking failed"; exit 1 }
@@ -151,9 +153,12 @@ if ($Test) {
         (Join-Path $TestDir "test_settings.c"),
         (Join-Path $SrcDir  "json_utils.c"),
         (Join-Path $SrcDir  "settings_data.c"),
-        (Join-Path $SrcDir  "alarms.c")
+        (Join-Path $SrcDir  "alarms.c"),
+        (Join-Path $SrcDir  "power.c")
     )
-    & $GccPath (@("-o", $TestExe) + $TestSrc + $CFlags)
+    # alarms.c reaches settings_data.c, which is already here; nothing in the
+    # schedule needs a window.
+    & $GccPath (@("-o", $TestExe) + $TestSrc + $CFlags + @("-lpowrprof"))
     if ($LASTEXITCODE -ne 0) { Write-Error "Test build failed"; exit 1 }
 
     & $TestExe

@@ -50,14 +50,19 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Test
 
 ### Timer / Stopwatch
 
-- **Countdown timer** — set hours/minutes/seconds, start/pause/reset, alarm fires at zero, digits turn red
+- **Countdown timer** — set hours/minutes/seconds with 5/10/25 minute presets, start/pause/reset, alarm fires at zero, digits turn red
 - **Stopwatch** — start/stop/reset, `HH:MM:SS.cc` centisecond display
 - **Background running** — timers keep ticking when switching to clock mode; green-highlighted mode buttons indicate active background timers
 - Toggle between Clock / Timer / Stopwatch via the mode bar below the clock
 
 ### Alarms
 
+- **Wakes the PC from sleep** — a waitable timer with `fResume` is armed for the next alarm, so a machine asleep at 07:00 comes back for it. Windows must have "Allow wake timers" on; Settings says so plainly when it does not, rather than letting the alarm fail silently
+- **Catches up alarms it missed** — anything that came due while the machine was asleep or the app was not running rings on the next start or resume, labelled with the time it should have gone off. Capped at 12 hours, so coming back from a week away does not ring for a Tuesday that is long past
+- **Holds off sleep while ringing** — `ES_SYSTEM_REQUIRED`/`ES_DISPLAY_REQUIRED` for as long as the alarm sounds
 - **Up to 10 configurable alarms** — each with custom hour, minute, label, and per-day scheduling (Sun-Sat checkboxes or All/None shortcuts)
+- **Per-alarm overrides** — its own sound file, volume and snooze length, each defaulting to the global setting. A row shows a note glyph when it has a sound of its own
+- **Skip next occurrence** — spends itself on the next time the alarm would ring and then clears, missed occurrences included
 - **Inline alarm panel** in the main window — toggle checkbox to enable/disable each alarm, Edit/Clear buttons, time + label display
 - **Collapsible panel** — click the ▼/▶ arrow to expand or collapse the alarm area; window auto-resizes
 - **Snooze** — configurable delay (1-30 min) with on-screen countdown and cancel button
@@ -66,10 +71,25 @@ powershell -ExecutionPolicy Bypass -File build.ps1 -Test
 
 ### Sound
 
-- **Simple tones** — PC speaker beeps with configurable crescendo (15-second volume/frequency ramp)
-- **MP3 playback** — place `.mp3` files in the `songs\` folder; shuffled random playback via Windows MCI
-- **Configurable volume** — 10%-100% slider for MP3
+Media Foundation decodes, WASAPI renders, and gain is applied to the float
+buffer on the way out. That one gain serves the volume setting, the crescendo,
+the sleep-timer fade and per-alarm volume, rather than four unrelated
+mechanisms.
+
+- **Music playback** — put audio files in `songs\`; `.mp3`, `.wav`, `.flac`, `.m4a`, `.wma`, `.aac` and `.mp4` all decode. Shuffled, and the shuffle carries on across alarms instead of restarting
+- **Generated tone** — a two-tone alarm synthesised into the same path, so it obeys the volume setting. `Beep()` could not be given one
+- **Configurable volume** — 10%-100%, and it now applies in both modes
+- **Crescendo** — a real 15-second gain ramp, resumed across a track change rather than restarted
+- **Nothing falls silent** — a track that will not decode is skipped, and an empty or unplayable `songs\` folder falls back to the tone
 - **Sound preview** — "Test Sound" button in Settings
+
+### Sleep timer
+
+The inverse of the crescendo: plays from `songs\` and fades to silence over the
+configured length, then closes the device. It lives on the clock mode bar and
+shows the time remaining while it runs; an alarm firing takes the device over
+from it. There is deliberately no tone fallback — with nothing to play, there
+is no sleep timer.
 
 ### System tray
 
@@ -103,8 +123,9 @@ menu. All options are persisted to `alarmclock_settings.json` (UTF-8) next to th
 | Alarm slots | Number of visible alarm rows (1-10) |
 | Snooze (min) | Snooze delay (1, 2, 3, 5, 10, 15, 20, 30) |
 | Alarm Sound | Simple tone or MP3 |
-| Alarm volume | 10%-100% (MP3 only) |
+| Alarm volume | 10%-100%, in both sound modes |
 | Crescendo Alarm | Ramp volume over 15 seconds |
+| Sleep timer (min) | Length of the fade-to-silence timer |
 | Start with Windows | Registry Run key |
 | Always on Top | Keep window above others |
 | Start minimized | Launch hidden in tray |
@@ -113,6 +134,10 @@ menu. All options are persisted to `alarmclock_settings.json` (UTF-8) next to th
 Settings are written to a temporary file and swapped into place, leaving the
 previous copy as `alarmclock_settings.json.bak`. If the main file cannot be
 parsed, the backup is loaded instead.
+
+A key the running build does not recognise, or one carrying an unexpected type,
+is skipped rather than treated as corruption — so a newer build's settings file
+does not cost an older build every alarm in it.
 
 ## Source structure
 
@@ -128,12 +153,16 @@ src/
   alarms.c / .h       Alarm data structures and firing logic
   alarm_dialog.c/.h   Per-alarm edit dialog (per-day scheduling)
   settings_dialog.c/.h Owner-draw settings dialog
-  sound.c / .h        Beep tones, MCI MP3 playback, crescendo
+  sound.c / .h        Which track, how loud, when to stop; sleep timer
+  audio.c / .h        Media Foundation decode, WASAPI render, software gain
+  power.c / .h        Wake timers, keep-awake, wake-timer policy
   tray.c / .h         System tray icon, tooltip, balloon
   settings_data.c/.h  JSON load/save bridge
   json_utils.c / .h   UTF-8 JSON reader/writer
 tests/
-  test_settings.c     Console harness over the settings round trip
+  test_settings.c     Settings round trip, alarm schedule, catch-up, wake timing
+  test_audio.c        Drives the real audio device at zero gain
+  test_dialog.c       Shows a dialog and checks its layout; not part of -Test
 resources/
   app.rc              Resource script (manifest, icon, font, dialogs)
   app.manifest        Common Controls v6 + PerMonitorV2 DPI
