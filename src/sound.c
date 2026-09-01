@@ -169,6 +169,11 @@ static BOOL play_next_track(AppState *s) {
 
 void sound_play_alarm(AppState *s) {
     BOOL started = FALSE;
+
+    /* An alarm takes the device over from the sleep timer rather than fighting
+       it for the one render thread. */
+    s->sleep_running = FALSE;
+    s->sleep_end_ms  = 0;
     const WCHAR *own = s->sound_preview ? NULL : alarm_sound_for(s, s->ringing_alarm);
 
     /* This alarm's own sound wins, but only if it still opens - a file that has
@@ -205,7 +210,41 @@ void sound_stop_alarm(AppState *s) {
     audio_stop();
 }
 
+BOOL sound_start_sleep_timer(AppState *s) {
+    if (s->alarm_active) return FALSE;      /* never talk over a ringing alarm */
+
+    /* Deliberately no tone fallback: a two-tone alarm is not something to fall
+       asleep to, so with nothing playable there is no sleep timer. */
+    if (!ensure_tracks(s) || !play_next_track(s)) return FALSE;
+
+    int mins = (s->sleep_minutes > 0) ? s->sleep_minutes : 30;
+    audio_ramp_gain(target_gain(s), 0.0f, (DWORD)mins * 60u * 1000u);
+
+    s->sleep_running = TRUE;
+    s->sleep_end_ms  = GetTickCount64() + (ULONGLONG)mins * 60000ULL;
+    return TRUE;
+}
+
+void sound_stop_sleep_timer(AppState *s) {
+    s->sleep_running = FALSE;
+    s->sleep_end_ms  = 0;
+    audio_stop();
+}
+
 void sound_on_track_done(AppState *s) {
+    if (s->sleep_running && !s->alarm_active) {
+        /* Carry the fade across the track change instead of restarting it. */
+        float     carried = audio_get_gain();
+        ULONGLONG now     = GetTickCount64();
+
+        if (s->sleep_end_ms <= now || !play_next_track(s)) {
+            sound_stop_sleep_timer(s);
+            return;
+        }
+        audio_ramp_gain(carried, 0.0f, (DWORD)(s->sleep_end_ms - now));
+        return;
+    }
+
     if (!s->alarm_active) return;
 
     const WCHAR *own = alarm_sound_for(s, s->ringing_alarm);

@@ -113,6 +113,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     g_state.acrylic         = TRUE;
     g_state.app_mode        = APP_MODE_CLOCK;
     g_state.alarm_volume    = 80;
+    g_state.sleep_minutes   = 30;
     /* Zero is "nothing has fired yet"; the stamp is a real point in time, so it
        can never legitimately be zero. */
     g_state.last_fire_stamp = 0;

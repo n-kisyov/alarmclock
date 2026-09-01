@@ -80,6 +80,12 @@ typedef struct {
     ULONGLONG cd_last_tick;
     BOOL     alarms_collapsed;
 
+    /* Sleep timer: the inverse of the crescendo. Plays from the songs folder
+       and rides the same gain down to silence. */
+    BOOL      sleep_running;
+    ULONGLONG sleep_end_ms;
+    int       sleep_minutes;      /* persisted preference */
+
     /* Stopwatch state */
     BOOL     sw_running;
     DWORD    sw_start_tick;
@@ -141,6 +147,8 @@ UINT   tray_taskbar_created_msg(void);
 void   sound_play_alarm(AppState *s);
 void   sound_stop_alarm(AppState *s);
 void   sound_on_track_done(AppState *s);
+BOOL   sound_start_sleep_timer(AppState *s);
+void   sound_stop_sleep_timer(AppState *s);
 
 void   autostart_update(AppState *s);
 

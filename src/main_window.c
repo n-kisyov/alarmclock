@@ -390,7 +390,7 @@ static void show_alarm_balloon(AppState *s, int idx);
 typedef enum {
     MB_NONE = 0,
     MB_SNOOZE, MB_DISMISS,
-    MB_TO_CLOCK, MB_TO_TIMER, MB_TO_STOPWATCH,
+    MB_TO_CLOCK, MB_TO_TIMER, MB_TO_STOPWATCH, MB_SLEEP,
     MB_CD_START, MB_CD_PAUSE, MB_CD_SET, MB_CD_RESET,
     MB_SW_START, MB_SW_STOP, MB_SW_RESET
 } ModeButtonId;
@@ -429,6 +429,14 @@ static void mb_add(ModeBar *bar, ModeButtonId id, const WCHAR *text, int width,
     if (!it) return;
     it->id = id; it->text = text; it->width = width;
     it->bg = bg; it->fg = fg; it->highlight = highlight;
+}
+
+/* For a caption built on the fly: mb_add only keeps the pointer, so a caller's
+   local buffer would be dangling by the time the bar is drawn. */
+static void mb_add_copy(ModeBar *bar, ModeButtonId id, const WCHAR *text, int width,
+                        COLORREF bg, COLORREF fg, BOOL highlight) {
+    lstrcpynW(bar->labelBuf, text, ARRAYSIZE(bar->labelBuf));
+    mb_add(bar, id, bar->labelBuf, width, bg, fg, highlight);
 }
 
 static void mb_add_label(ModeBar *bar, const WCHAR *text, int width, COLORREF fg) {
@@ -516,6 +524,17 @@ static void build_mode_bar(const AppState *s, const RECT *clockRect, ModeBar *ba
             mb_add(bar, MB_TO_STOPWATCH, L"Stopw.", 67, RGB(0x20,0x80,0x20), white, TRUE);
         else
             mb_add(bar, MB_TO_STOPWATCH, L"Stopw.", 67, neutral, s->textColor, FALSE);
+
+        if (s->sleep_running) {
+            ULONGLONG now    = GetTickCount64();
+            ULONGLONG remain = (s->sleep_end_ms > now) ? (s->sleep_end_ms - now) : 0;
+            int rs = (int)(remain / 1000);
+            WCHAR buf[32];
+            wsprintfW(buf, L"Sleep %d:%02d", rs / 60, rs % 60);
+            mb_add_copy(bar, MB_SLEEP, buf, 92, RGB(0x5A,0x3E,0x8C), white, TRUE);
+        } else {
+            mb_add(bar, MB_SLEEP, L"Sleep", 60, neutral, s->textColor, FALSE);
+        }
     }
 
     mb_layout(bar, clockRect);
@@ -563,6 +582,18 @@ static void mode_action(HWND hwnd, ModeButtonId hit) {
         break;
     case MB_TO_STOPWATCH:
         s->app_mode = APP_MODE_STOPWATCH;
+        break;
+
+    case MB_SLEEP:
+        if (s->sleep_running) {
+            sound_stop_sleep_timer(s);
+        } else if (!sound_start_sleep_timer(s)) {
+            MessageBoxW(hwnd,
+                L"The sleep timer plays music, and the songs folder next to "
+                L"the executable has nothing playable in it.\n\nAdd some "
+                L"audio files there and try again.",
+                L"AlarmClock", MB_OK | MB_ICONINFORMATION);
+        }
         break;
 
     case MB_CD_START:
@@ -661,6 +692,18 @@ INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COMMAND:
         if (!s) break;
         switch (LOWORD(wp)) {
+        /* Presets fill the fields rather than committing, so they can still be
+           adjusted before OK. */
+        case IDC_CD_PRESET_5:
+        case IDC_CD_PRESET_10:
+        case IDC_CD_PRESET_25: {
+            int mins = (LOWORD(wp) == IDC_CD_PRESET_5)  ? 5 :
+                       (LOWORD(wp) == IDC_CD_PRESET_10) ? 10 : 25;
+            SetDlgItemText(hDlg, IDC_CD_HOURS, L"0");
+            { TCHAR b[8]; wsprintf(b, L"%d", mins); SetDlgItemText(hDlg, IDC_CD_MINS, b); }
+            SetDlgItemText(hDlg, IDC_CD_SECS, L"0");
+            return TRUE;
+        }
         case IDOK: {
             TCHAR b[16];
             GetDlgItemText(hDlg,IDC_CD_HOURS,b,16); s->cd_hours = _wtoi(b);
@@ -1175,6 +1218,7 @@ static void show_and_focus(HWND hwnd) {
 static UINT timer_interval(const AppState *s) {
     if (s->app_mode == APP_MODE_STOPWATCH) return 50;
     if (s->alarm_active)                   return 250;
+    if (s->sleep_running)                  return 250;
     if (s->app_mode == APP_MODE_COUNTDOWN) return 200;
     if (s->snooze_pending)                 return 250;
     return (s->clock_style == CLOCK_ANALOG) ? 50 : 250;
@@ -1286,6 +1330,13 @@ static void on_timer(HWND hwnd) {
         tray_update_tooltip(s);
     }
 
+    if (s->sleep_running && GetTickCount64() >= s->sleep_end_ms) {
+        /* The fade has reached silence; stop the device rather than leaving it
+           open rendering nothing. */
+        sound_stop_sleep_timer(s);
+        InvalidateRect(hwnd, NULL, FALSE);
+    }
+
     /* Cap how long an alarm can ring unattended: snooze it a few times, then
        give up rather than sounding forever in an empty house. */
     if (s->alarm_active && s->alarm_started_ms &&
@@ -1306,7 +1357,7 @@ static void on_timer(HWND hwnd) {
     BOOL secondChanged = ((int)st.wSecond != lastPaintedSec);
     BOOL animating = s->alarm_active || s->snooze_pending ||
                      s->app_mode == APP_MODE_STOPWATCH ||
-                     s->cd_running ||
+                     s->cd_running || s->sleep_running ||
                      (s->app_mode == APP_MODE_CLOCK && s->clock_style == CLOCK_ANALOG);
 
     if (secondChanged || animating) {

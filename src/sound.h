@@ -7,6 +7,11 @@
 void sound_play_alarm(AppState *s);
 void sound_stop_alarm(AppState *s);
 void sound_on_track_done(AppState *s);
+
+/* Plays from the songs folder and fades to silence over sleep_minutes. Returns
+   FALSE when there is nothing playable to send anyone to sleep with. */
+BOOL sound_start_sleep_timer(AppState *s);
+void sound_stop_sleep_timer(AppState *s);
 void sound_cleanup(AppState *s);
 
 #endif

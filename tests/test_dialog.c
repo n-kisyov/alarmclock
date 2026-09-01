@@ -5,11 +5,51 @@
 #include <stdio.h>
 #include "main.h"
 #include "alarm_dialog.h"
+#include "settings_dialog.h"
 #include "theme.h"
 
 AppState g_state;
 
-int main(void) {
+/* The settings dialog reaches for this on OK; the harness never presses OK. */
+void autostart_update(AppState *s) { (void)s; }
+
+static int show_settings(HINSTANCE hInst) {
+    HWND dlg = CreateDialogParamW(hInst, MAKEINTRESOURCEW(IDD_SETTINGS), NULL,
+                                  settings_dlg_proc, (LPARAM)&g_state);
+    if (!dlg) {
+        printf("FAIL: settings dialog did not create (error %lu)\n", GetLastError());
+        return 1;
+    }
+    ShowWindow(dlg, SW_SHOW);
+    UpdateWindow(dlg);
+
+    int fails = 0;
+    if (!GetDlgItem(dlg, IDC_SLEEP_MINUTES)) {
+        printf("  FAIL: sleep timer control missing\n");
+        fails++;
+    }
+    /* The dialog grew; make sure OK is still inside it. */
+    RECT dr, ok;
+    GetClientRect(dlg, &dr);
+    GetWindowRect(GetDlgItem(dlg, IDOK), &ok);
+    MapWindowPoints(NULL, dlg, (POINT *)&ok, 2);
+    printf("  client %ld x %ld, OK button bottom at %ld\n",
+           dr.right, dr.bottom, ok.bottom);
+    if (ok.bottom > dr.bottom) { printf("  FAIL: OK button is clipped\n"); fails++; }
+
+    DWORD end = GetTickCount() + 9000;
+    MSG msg;
+    while (GetTickCount() < end) {
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE)) {
+            if (!IsDialogMessageW(dlg, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+        }
+        Sleep(10);
+    }
+    printf("%s\n", fails ? "FAILED" : "ok");
+    return fails;
+}
+
+int main(int argc, char **argv) {
     HINSTANCE hInst = GetModuleHandleW(NULL);
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
@@ -17,8 +57,14 @@ int main(void) {
     InitCommonControlsEx(&icc);
 
     ZeroMemory(&g_state, sizeof(g_state));
-    g_state.dark_mode = TRUE;
+    g_state.dark_mode     = TRUE;
+    g_state.alarm_count   = 5;
+    g_state.alarm_volume  = 80;
+    g_state.snooze_minutes = 3;
+    g_state.sleep_minutes = 45;
     theme_update_colors(&g_state);
+
+    if (argc > 1 && strcmp(argv[1], "settings") == 0) return show_settings(hInst);
 
     AlarmEditData d;
     ZeroMemory(&d, sizeof(d));

@@ -147,6 +147,40 @@ int main(void) {
             sound_stop_alarm(&s);
         }
 
+        printf("\nsleep timer\n");
+        s.sound_mode = SOUND_MP3;
+        s.crescendo  = FALSE;
+        s.sleep_minutes = 30;
+        s.alarm_active = FALSE;      /* it refuses to talk over a ringing alarm */
+
+        if (sample) {
+            check("starts when there is music", sound_start_sleep_timer(&s));
+            check("it is running", s.sleep_running);
+            check("and is fading, not holding a level", audio_ramp_active());
+            check("with an end time in the future", s.sleep_end_ms > GetTickCount64());
+            sound_stop_sleep_timer(&s);
+            check("stopping ends it", !s.sleep_running && !audio_is_playing());
+
+            check("it refuses while an alarm is ringing",
+                  (s.alarm_active = TRUE, !sound_start_sleep_timer(&s)));
+            s.alarm_active = FALSE;
+
+            /* An alarm has to take the device over rather than share it. */
+            sound_start_sleep_timer(&s);
+            s.alarm_active = TRUE;
+            sound_play_alarm(&s);
+            check("an alarm cancels the sleep timer", !s.sleep_running);
+            check("and is itself playing", audio_is_playing());
+            sound_stop_alarm(&s);
+
+            /* Deliberately no tone fallback here: a two-tone alarm is not
+               something to fall asleep to. */
+            wsprintfW(f, L"%s\\clip.wav", songs);
+            DeleteFileW(f);
+            check("no music means no sleep timer", !sound_start_sleep_timer(&s));
+            check("and nothing is left playing", !audio_is_playing());
+        }
+
         sound_cleanup(&s);
     }
 

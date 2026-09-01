@@ -15,6 +15,10 @@ static const TCHAR *vol_items[] = {
 static const int vol_values[] = {10,20,30,40,50,60,70,80,90,100};
 static const int vol_count = 10;
 
+static const TCHAR *sleep_items[] = { L"15", L"30", L"45", L"60", L"90" };
+static const int sleep_values[] = {15, 30, 45, 60, 90};
+static const int sleep_count = 5;
+
 /* Kept on the window rather than in a function-level static: WM_CTLCOLOR* is
    not guaranteed to arrive after WM_INITDIALOG, and a static left the pointer
    NULL on the first message of the very first invocation. */
@@ -74,6 +78,15 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             for (int i = 0; i < vol_count; i++) {
                 SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)vol_items[i]);
                 if (vol_values[i] == s->alarm_volume) sel = i;
+            }
+            SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
+        }
+        {
+            HWND hCombo = GetDlgItem(hDlg, IDC_SLEEP_MINUTES);
+            int sel = 1;                     /* 30 minutes */
+            for (int i = 0; i < sleep_count; i++) {
+                SendMessageW(hCombo, CB_ADDSTRING, 0, (LPARAM)sleep_items[i]);
+                if (sleep_values[i] == s->sleep_minutes) sel = i;
             }
             SendMessageW(hCombo, CB_SETCURSEL, sel, 0);
         }
@@ -172,6 +185,11 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
                 HWND hCombo = GetDlgItem(hDlg, IDC_ALARM_VOLUME);
                 int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
                 if (sel >= 0 && sel < vol_count) s->alarm_volume = vol_values[sel];
+            }
+            {
+                HWND hCombo = GetDlgItem(hDlg, IDC_SLEEP_MINUTES);
+                int sel = (int)SendMessageW(hCombo, CB_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < sleep_count) s->sleep_minutes = sleep_values[sel];
             }
 
             if (newAutostart != s->autostart) {

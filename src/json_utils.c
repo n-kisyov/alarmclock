@@ -321,6 +321,7 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
         else if (lstrcmp(key, L"alarm_volume") == 0) { int av; if (json_read_int(&r, &av) && av >= 10 && av <= 100) t->alarm_volume = av; }
         else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm; if (json_read_int(&r, &sm) && sm >= 1 && sm <= 60) t->snooze_minutes = sm; }
         else if (lstrcmp(key, L"app_mode") == 0) { int am; if (json_read_int(&r, &am) && am >= 0 && am <= 2) t->app_mode = am; }
+        else if (lstrcmp(key, L"sleep_minutes") == 0) { int sl; if (json_read_int(&r, &sl) && sl >= 1 && sl <= 240) t->sleep_minutes = sl; }
         else if (lstrcmp(key, L"win_x") == 0) json_read_int(&r, &t->winX);
         else if (lstrcmp(key, L"win_y") == 0) json_read_int(&r, &t->winY);
         else if (lstrcmp(key, L"win_w") == 0) json_read_int(&r, &t->winW);
@@ -468,6 +469,7 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         L"  \"alarms_collapsed\": %s,\n"
         L"  \"alarm_volume\": %d,\n"
         L"  \"snooze_minutes\": %d,\n"
+        L"  \"sleep_minutes\": %d,\n"
         L"  \"app_mode\": %d,\n"
         L"  \"win_x\": %d,\n"
         L"  \"win_y\": %d,\n"
@@ -482,7 +484,8 @@ BOOL json_save_settings(const AppState *s, const TCHAR *path) {
         s->alarms_enabled ? L"true" : L"false", s->alarm_count,
         s->alarms_collapsed ? L"true" : L"false",
         s->alarm_volume,
-        s->snooze_minutes, s->app_mode, s->winX, s->winY, s->winW, s->winH,
+        s->snooze_minutes, s->sleep_minutes, s->app_mode,
+        s->winX, s->winY, s->winW, s->winH,
         s->sound_mode == SOUND_MP3 ? L"mp3" : L"simple",
         s->cd_hours, s->cd_mins, s->cd_secs)) goto cleanup;
 

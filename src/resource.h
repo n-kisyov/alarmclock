@@ -23,6 +23,7 @@
 #define IDC_ALWAYS_ON_TOP    214
 #define IDC_ALARM_VOLUME     215
 #define IDC_PREVIEW_SOUND    216
+#define IDC_SLEEP_MINUTES    217
 
 #define IDD_ALARM            300
 #define IDC_ALARM_HOUR       301
@@ -50,6 +51,9 @@
 #define IDC_CD_HOURS         401
 #define IDC_CD_MINS          402
 #define IDC_CD_SECS          403
+#define IDC_CD_PRESET_5      404
+#define IDC_CD_PRESET_10     405
+#define IDC_CD_PRESET_25     406
 
 #define APP_MODE_CLOCK       0
 #define APP_MODE_COUNTDOWN   1
