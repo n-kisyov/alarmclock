@@ -12,7 +12,38 @@ void alarms_init(AppState *s) {
     }
 }
 
-BOOL alarms_check(AppState *s, const SYSTEMTIME *st) {
+/* Minutes from now until this alarm next comes round, or FALSE if it never will.
+   Lived as a static in tray.c; the tooltip and the wake timer both need it, and
+   two copies of a schedule calculation is one too many. */
+BOOL alarms_next_delta_minutes(const SYSTEMTIME *st, const Alarm *a, int *delta_minutes) {
+    if (!a->enabled || a->hour == ALARM_UNSET || a->minute == ALARM_UNSET) return FALSE;
+
+    int now_min   = (int)st->wHour * 60 + (int)st->wMinute;
+    int alarm_min = a->hour * 60 + a->minute;
+
+    if (a->repeat_days == 0) {
+        if (alarm_min <= now_min) return FALSE;
+        *delta_minutes = alarm_min - now_min;
+        return TRUE;
+    }
+
+    /* Runs to 7, not 6. Today is skipped once its time has passed, so a weekly
+       alarm on this very weekday had no candidate left in a 0..6 sweep and was
+       reported as never coming round again - a Wednesday-only alarm vanished
+       from the tooltip every Wednesday after it rang. Offset 7 is the same
+       weekday, one week out. */
+    for (int day_offset = 0; day_offset <= 7; day_offset++) {
+        int day = ((int)st->wDayOfWeek + day_offset) % 7;
+        if (!(a->repeat_days & (1 << day))) continue;
+        if (day_offset == 0 && alarm_min <= now_min) continue;
+        *delta_minutes = day_offset * 24 * 60 + (alarm_min - now_min);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+BOOL alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index) {
+    if (out_index) *out_index = -1;
 
     if (!s->alarms_enabled || s->alarm_active) return FALSE;
 
@@ -42,6 +73,7 @@ BOOL alarms_check(AppState *s, const SYSTEMTIME *st) {
 
         s->alarm_active = TRUE;
         s->last_fire_min = nowMin;
+        if (out_index) *out_index = i;
         return TRUE;
     }
     return FALSE;

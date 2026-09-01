@@ -18,6 +18,13 @@
 #define SOUND_SIMPLE   0
 #define SOUND_MP3      1
 
+/* Base window sizes, authored at 96 dpi like every other layout constant and
+   scaled at the point of use. */
+#define WIN_W_DIGITAL  720
+#define WIN_H_DIGITAL  520
+#define WIN_W_ANALOG   500
+#define WIN_H_ANALOG   710
+
 typedef struct {
     int   hour;
     int   minute;
@@ -46,6 +53,7 @@ typedef struct {
     int      winX, winY, winW, winH;
 
     BOOL     alarm_active;
+    int      ringing_alarm;      /* slot that is ringing; -1 when it is the timer */
     int      last_fire_min;
     ULONGLONG alarm_started_ms;  /* for the maximum ring duration */
     int      auto_snooze_count;
@@ -91,6 +99,10 @@ typedef struct {
     /* Written by the UI thread, polled by the sound threads. volatile keeps
        -O2 from caching it in a register inside their loops. */
     volatile LONG stop_sound;
+    /* Manual-reset, signalled alongside stop_sound. The sound threads wait on
+       it instead of sleeping, so a stop is seen at once rather than up to a
+       second later - which the UI thread spent blocked. */
+    HANDLE   hStopEvent;
     BOOL     sound_preview;
 
     TCHAR    exe_dir[MAX_PATH];
@@ -106,7 +118,8 @@ void   theme_dialog_init(HWND hDlg, AppState *s);
 /* Settings load/save live in json_utils.h, which owns the result type. */
 
 void   alarms_init(AppState *s);
-BOOL   alarms_check(AppState *s, const SYSTEMTIME *st);
+BOOL   alarms_check(AppState *s, const SYSTEMTIME *st, int *out_index);
+BOOL   alarms_next_delta_minutes(const SYSTEMTIME *st, const Alarm *a, int *delta_minutes);
 
 void   clock_init(void);
 void   clock_cleanup(void);
@@ -119,6 +132,7 @@ void   tray_create(HWND hwnd, AppState *s);
 void   tray_remove(AppState *s);
 void   tray_show_menu(HWND hwnd, AppState *s);
 void   tray_update_tooltip(AppState *s);
+UINT   tray_taskbar_created_msg(void);
 
 void   sound_play_alarm(AppState *s);
 void   sound_stop_alarm(AppState *s);

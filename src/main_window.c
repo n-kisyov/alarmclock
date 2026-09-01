@@ -267,7 +267,7 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
     RECT settingsR = get_settings_rect(&header);
 
     RECT hdr = header;
-    hdr.right = settingsR.left - 8;
+    hdr.right = settingsR.left - S(8);
     DrawText(hdc, L"Alarms", -1, &hdr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 
@@ -281,7 +281,7 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
 
     WCHAR *arrow = s->alarms_collapsed ? L"\x25B6" : L"\x25BC";
     hdr = header;
-    hdr.left = hdr.right - 22;
+    hdr.left = hdr.right - S(22);
     DrawText(hdc, arrow, 1, &hdr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     SelectObject(hdc, hOldFont);
 
@@ -345,8 +345,8 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         }
 
         RECT timeR;
-        timeR.left = chkR.right + 8; timeR.top = rowR.top + 4;
-        timeR.right = editR.left - 8; timeR.bottom = rowR.bottom - 4;
+        timeR.left = chkR.right + S(8); timeR.top = rowR.top + S(4);
+        timeR.right = editR.left - S(8); timeR.bottom = rowR.bottom - S(4);
 
         SetBkMode(hdc, TRANSPARENT); SetTextColor(hdc, s->textColor);
         HFONT hRowFont = (HFONT)SelectObject(hdc, s->hGuiFont);
@@ -373,6 +373,7 @@ static void snooze_alarm(void);
 static void dismiss_alarm(void);
 static void show_and_focus(HWND hwnd);
 static UINT timer_interval(const AppState *s);
+static void show_alarm_balloon(AppState *s, int idx);
 
 /* ---------- mode action bar ----------
 
@@ -613,6 +614,7 @@ static void dismiss_alarm(void) {
     s->alarm_active = FALSE;
     s->snooze_pending = FALSE;
     s->auto_snooze_count = 0;
+    s->ringing_alarm = -1;
     sound_stop_alarm(s);
     InvalidateRect(s->hMainWnd, NULL, FALSE);
 }
@@ -1106,6 +1108,35 @@ static void on_command(HWND hwnd, WPARAM wp) {
 /* SW_SHOW displays a window at its current state, which for a minimized window
    means it stays minimized - so an alarm could ring with its own window still
    in the taskbar. The fade is kept for the hidden-to-tray case, where it works. */
+/* SetForegroundWindow from a process that is not already in the foreground is
+   normally refused, which for an alarm means the window never actually comes
+   up. Attaching to the foreground thread's input queue lifts the restriction;
+   if it still loses the race, flash the taskbar button rather than ring behind
+   whatever the user is looking at. */
+static void force_foreground(HWND hwnd) {
+    HWND  fg    = GetForegroundWindow();
+    DWORD fgTid = fg ? GetWindowThreadProcessId(fg, NULL) : 0;
+    DWORD myTid = GetCurrentThreadId();
+
+    if (fgTid && fgTid != myTid && AttachThreadInput(myTid, fgTid, TRUE)) {
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+        AttachThreadInput(myTid, fgTid, FALSE);
+    } else {
+        SetForegroundWindow(hwnd);
+    }
+
+    if (GetForegroundWindow() != hwnd) {
+        FLASHWINFO fi;
+        ZeroMemory(&fi, sizeof(fi));
+        fi.cbSize  = sizeof(fi);
+        fi.hwnd    = hwnd;
+        fi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+        fi.uCount  = 5;
+        FlashWindowEx(&fi);
+    }
+}
+
 static void show_and_focus(HWND hwnd) {
     if (IsIconic(hwnd)) {
         ShowWindow(hwnd, SW_RESTORE);
@@ -1115,7 +1146,7 @@ static void show_and_focus(HWND hwnd) {
     } else {
         ShowWindow(hwnd, SW_SHOW);
     }
-    SetForegroundWindow(hwnd);
+    force_foreground(hwnd);
 }
 
 /* An alarm nobody is home for used to ring until the machine slept. */
@@ -1160,30 +1191,38 @@ static void tick_countdown(void) {
         s->cd_remaining_ms = 0;
         s->cd_running = FALSE;
         if (!s->alarm_active) {
+            BOOL wasInBackground = s->hMainWnd &&
+                (IsIconic(s->hMainWnd) || !IsWindowVisible(s->hMainWnd));
+
             begin_alarm(s, TRUE);
+            s->ringing_alarm = -1;          /* the timer, not a slot */
             sound_play_alarm(s);
             /* Bring the window up like a scheduled alarm does, so there is
                something to press Dismiss on. */
             s->app_mode = APP_MODE_COUNTDOWN;
             if (s->hMainWnd) show_and_focus(s->hMainWnd);
+
+            /* A timer finishing while hidden was silent in the tray. */
+            if (wasInBackground) show_alarm_balloon(s, -1);
         }
     }
 }
 
-static void show_alarm_balloon(AppState *s, const SYSTEMTIME *st) {
+/* Takes the slot that actually fired. It used to re-scan for any alarm whose
+   hour and minute matched the clock, ignoring enabled and repeat_days, so with
+   two alarms set to the same time it could name the wrong one - or a disabled
+   one - even though alarms_check already knew which had fired. */
+static void show_alarm_balloon(AppState *s, int idx) {
     s->nid.uFlags |= NIF_INFO;
     s->nid.dwInfoFlags = NIIF_USER;
     lstrcpyW(s->nid.szInfoTitle, L"AlarmClock");
     s->nid.szInfo[0] = 0;
-    if (s->alarms_enabled) {
-        for (int i = 0; i < MAX_ALARMS; i++) {
-            if (s->alarms[i].hour == (int)st->wHour && s->alarms[i].minute == (int)st->wMinute) {
-                wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
-                          s->alarms[i].hour, s->alarms[i].minute,
-                          s->alarms[i].label[0] ? s->alarms[i].label : L"Alarm");
-                break;
-            }
-        }
+    if (idx >= 0 && idx < MAX_ALARMS) {
+        wsprintfW(s->nid.szInfo, L"%02d:%02d  %s",
+                  s->alarms[idx].hour, s->alarms[idx].minute,
+                  s->alarms[idx].label[0] ? s->alarms[idx].label : L"Alarm");
+    } else {
+        lstrcpyW(s->nid.szInfo, L"Timer finished");
     }
     Shell_NotifyIconW(NIM_MODIFY, &s->nid);
 
@@ -1205,16 +1244,18 @@ static void on_timer(HWND hwnd) {
     if ((int)st.wSecond != lastAlarmSec) {
         lastAlarmSec = (int)st.wSecond;
 
-        if (alarms_check(s, &st)) {
+        int fired = -1;
+        if (alarms_check(s, &st, &fired)) {
             /* Sampled before showing the window, or the test below would
                always see a visible window and never notify. */
             BOOL wasInBackground = IsIconic(hwnd) || !IsWindowVisible(hwnd);
 
             begin_alarm(s, TRUE);
+            s->ringing_alarm = fired;
             sound_play_alarm(s);
             show_and_focus(hwnd);
 
-            if (wasInBackground) show_alarm_balloon(s, &st);
+            if (wasInBackground) show_alarm_balloon(s, fired);
         }
 
         if (s->snooze_pending && GetTickCount64() >= s->snooze_end_ms) {
@@ -1275,12 +1316,9 @@ static void on_size(HWND hwnd, WPARAM wp) {
     InvalidateRect(hwnd, NULL, FALSE);
 }
 
-static void on_destroy(HWND hwnd) {
-    AppState *s = &g_state;
-    KillTimer(hwnd, TIMER_CLOCK);
-    sound_stop_alarm(s);
-    sound_cleanup();
-
+/* Shared by the normal exit path and the shutdown path, which never sees a
+   WM_DESTROY at all. */
+static void capture_placement(HWND hwnd, AppState *s) {
     WINDOWPLACEMENT wp; wp.length = sizeof(wp);
     if (GetWindowPlacement(hwnd, &wp)) {
         s->winX = wp.rcNormalPosition.left;
@@ -1288,7 +1326,15 @@ static void on_destroy(HWND hwnd) {
         s->winW = wp.rcNormalPosition.right - wp.rcNormalPosition.left;
         s->winH = wp.rcNormalPosition.bottom - wp.rcNormalPosition.top;
     }
+}
 
+static void on_destroy(HWND hwnd) {
+    AppState *s = &g_state;
+    KillTimer(hwnd, TIMER_CLOCK);
+    sound_stop_alarm(s);
+    sound_cleanup(s);
+
+    capture_placement(hwnd, s);
     settings_save(s);
     tray_remove(s);
 
@@ -1304,6 +1350,17 @@ static void on_destroy(HWND hwnd) {
 }
 
 LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    /* Explorer restarting takes every tray icon with it. Without re-adding ours
+       the app becomes unreachable: WM_CLOSE only hides the window, so the tray
+       menu is the only remaining route to Settings or Exit. */
+    UINT taskbarCreated = tray_taskbar_created_msg();
+    if (taskbarCreated && msg == taskbarCreated) {
+        g_state.tray_added = FALSE;
+        tray_create(hwnd, &g_state);
+        tray_update_tooltip(&g_state);
+        return 0;
+    }
+
     switch (msg) {
     case WM_CREATE: return on_create(hwnd);
     case WM_PAINT: on_paint(hwnd); return 0;
@@ -1328,6 +1385,23 @@ LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SIZE: on_size(hwnd, wp); return 0;
+    case WM_ENDSESSION:
+        /* Shutdown and logoff kill the process without a WM_DESTROY, so the save
+           in on_destroy never ran: window geometry, mode and countdown were lost
+           every time the machine was shut down. */
+        if (wp) {
+            capture_placement(hwnd, &g_state);
+            settings_save(&g_state);
+        }
+        return 0;
+    case WM_TIMECHANGE:
+        /* A clock jump - manual change, timezone, DST - leaves last_fire_min
+           describing a minute that no longer relates to now, which can suppress
+           the next legitimate fire. */
+        g_state.last_fire_min = -1;
+        tray_update_tooltip(&g_state);
+        InvalidateRect(hwnd, NULL, FALSE);
+        return 0;
     case WM_COMMAND: on_command(hwnd, wp); return 0;
     case WM_LBUTTONDOWN: on_lbuttondown(hwnd, lp); return 0;
     case WM_LBUTTONUP:   on_lbuttonup(hwnd, lp);   return 0;

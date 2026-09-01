@@ -8,11 +8,14 @@ static const int dayIds[7] = {
 };
 
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
-    static AlarmEditData *data;
+    /* On the window rather than in a function-level static, for the same reason
+       the settings and countdown dialogs moved off one. */
+    AlarmEditData *data = (AlarmEditData *)GetWindowLongPtrW(hDlg, GWLP_USERDATA);
 
     switch (msg) {
     case WM_INITDIALOG: {
         data = (AlarmEditData *)lp;
+        SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)data);
 
         AppState *s = &g_state;
         theme_dialog_init(hDlg, s);
@@ -88,6 +91,7 @@ INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             return TRUE;
 
         case IDOK: {
+            if (!data) return TRUE;
             GetDlgItemTextW(hDlg, IDC_ALARM_LABEL, data->label,
                             ARRAYSIZE(data->label));
 

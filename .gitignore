@@ -2,4 +2,5 @@ songs/
 obj/
 build/
 alarmclock_settings.json
+*.bak
 alarmclock.exe

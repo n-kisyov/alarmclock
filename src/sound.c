@@ -160,6 +160,17 @@ static void play_mp3_next(AppState *s) {
     }
 }
 
+/* Returns TRUE if a stop arrived while waiting. Every Sleep in these threads
+   went through here: the crescendo slept a whole second between checks, and a
+   dismiss sat blocked on the UI thread for that long waiting to be noticed.
+   Beep() itself still blocks for its own duration and cannot be interrupted. */
+static BOOL sound_wait(AppState *s, DWORD ms) {
+    if (s->hStopEvent)
+        return WaitForSingleObject(s->hStopEvent, ms) == WAIT_OBJECT_0;
+    Sleep(ms);
+    return s->stop_sound != 0;
+}
+
 static DWORD WINAPI cresendo_thread(LPVOID param) {
     AppState *s = (AppState *)param;
 
@@ -169,7 +180,7 @@ static DWORD WINAPI cresendo_thread(LPVOID param) {
 
     for (int step = 0; step < 15 && !s->stop_sound; step++) {
         set_mp3_volume(CRESCENDO_FLOOR + (target - CRESCENDO_FLOOR) * step / 14);
-        Sleep(1000);
+        if (sound_wait(s, 1000)) break;
     }
     if (!s->stop_sound) set_mp3_volume(target);
     g_crescendo_done = TRUE;
@@ -178,12 +189,7 @@ static DWORD WINAPI cresendo_thread(LPVOID param) {
 
 static DWORD WINAPI sound_preview_thread(LPVOID param) {
     AppState *s = (AppState *)param;
-    for (int step = 0; step < 60; step++) {
-        if (s->stop_sound) {
-            return 0;
-        }
-        Sleep(50);
-    }
+    if (sound_wait(s, 3000)) return 0;
 
     if (s->sound_preview && !s->stop_sound && s->hMainWnd) {
         PostMessageW(s->hMainWnd, WM_SOUND_PREVIEW_DONE, 0, 0);
@@ -197,11 +203,9 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
     if (s->sound_preview) {
         for (int i = 0; i < 6 && !s->stop_sound; i++) {
             Beep(1000, 200);
-            if (s->stop_sound) break;
-            Sleep(80);
+            if (sound_wait(s, 80)) return 0;
             Beep(1200, 200);
-            if (s->stop_sound) break;
-            Sleep(300);
+            if (sound_wait(s, 300)) return 0;
         }
         return 0;
     }
@@ -209,17 +213,17 @@ static DWORD WINAPI sound_simple_thread(LPVOID param) {
     if (s->crescendo) {
         for (int step = 0; step < 15 && !s->stop_sound; step++) {
             Beep(600 + step * 40, 200 + step * 20);
-            if (!s->stop_sound) Sleep(80);
-            if (!s->stop_sound) Beep(800 + step * 30, 200 + step * 20);
-            if (!s->stop_sound) Sleep(step < 8 ? 0 : 500);
+            if (sound_wait(s, 80)) return 0;
+            Beep(800 + step * 30, 200 + step * 20);
+            if (sound_wait(s, step < 8 ? 0 : 500)) return 0;
         }
     }
 
     while (!s->stop_sound) {
         Beep(1000, 200); if (s->stop_sound) break;
-        Sleep(80);
+        if (sound_wait(s, 80)) break;
         Beep(1200, 200); if (s->stop_sound) break;
-        Sleep(500);
+        if (sound_wait(s, 500)) break;
     }
     /* Deliberately does not clear stop_sound: only the stopper owns that flag.
        Clearing it here could cancel a stop aimed at the crescendo thread, or
@@ -244,6 +248,9 @@ void sound_play_alarm(AppState *s) {
     /* Cleared here rather than in the simple-tone branch below: the MP3 branch
        returns before ever reaching that assignment, so a leftover TRUE from the
        previous stop made the crescendo and preview threads exit immediately. */
+    if (!s->hStopEvent)
+        s->hStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);   /* manual reset */
+    if (s->hStopEvent) ResetEvent(s->hStopEvent);
     InterlockedExchange(&s->stop_sound, FALSE);
     g_crescendo_done = FALSE;
 
@@ -269,6 +276,7 @@ void sound_play_alarm(AppState *s) {
 void sound_stop_alarm(AppState *s) {
 
     InterlockedExchange(&s->stop_sound, TRUE);
+    if (s->hStopEvent) SetEvent(s->hStopEvent);
     s->sound_preview = FALSE;
 
     wait_and_close_thread(&s->hSoundThread);
@@ -286,7 +294,8 @@ void sound_on_mci_notify(AppState *s) {
     }
 }
 
-void sound_cleanup(void) {
+void sound_cleanup(AppState *s) {
     free_mp3_paths();
     ZeroMemory(&g_songs_mtime, sizeof(g_songs_mtime));
+    if (s->hStopEvent) { CloseHandle(s->hStopEvent); s->hStopEvent = NULL; }
 }

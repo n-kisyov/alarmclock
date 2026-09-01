@@ -75,6 +75,21 @@ static GpFont         *g_apFont    = NULL;
 static GpStringFormat *g_numFmt    = NULL;
 static int             g_numFontH  = 0;
 
+/* The AM/PM font was created twice on every frame - once to measure it, once to
+   draw with it. Cached like the dial's numerals. */
+static HFONT g_ampmFont = NULL;
+static int   g_ampmH    = 0;
+
+static HFONT ensure_ampm_font(int h) {
+    if (g_ampmFont && g_ampmH == h) return g_ampmFont;
+    if (g_ampmFont) DeleteObject(g_ampmFont);
+    g_ampmFont = CreateFontW(h, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_ampmH = g_ampmFont ? h : 0;
+    return g_ampmFont;
+}
+
 static void release_num_font_cache(void) {
     if (g_numFmt)    { GdipDeleteStringFormat(g_numFmt);   g_numFmt = NULL; }
     if (g_apFont)    { GdipDeleteFont(g_apFont);           g_apFont = NULL; }
@@ -111,6 +126,7 @@ void clock_init(void) {
 
 void clock_cleanup(void) {
     release_num_font_cache();
+    if (g_ampmFont) { DeleteObject(g_ampmFont); g_ampmFont = NULL; g_ampmH = 0; }
     GdiplusShutdown(g_gdipToken);
 }
 
@@ -156,21 +172,21 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     GetTextExtentPoint32W(hdc, timeBuf, lstrlenW(timeBuf), &timeSize);
 
     int ampmW = 0, ampmH = 0;
+    HFONT hAmpmFont = NULL;
     TEXTMETRICW tmAm;
+    ZeroMemory(&tmAm, sizeof(tmAm));
     if (ampm[0]) {
         ampmH = tmClock.tmHeight / 5;
         if (ampmH < 12) ampmH = 12;
-        HFONT hAmpmFont = CreateFontW(
-            ampmH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-        HFONT hPrev = (HFONT)SelectObject(hdc, hAmpmFont);
-        SIZE amSize;
-        GetTextExtentPoint32W(hdc, ampm, 2, &amSize);
-        ampmW = amSize.cx;
-        GetTextMetricsW(hdc, &tmAm);
-        SelectObject(hdc, hPrev);
-        DeleteObject(hAmpmFont);
+        hAmpmFont = ensure_ampm_font(ampmH);
+        if (hAmpmFont) {
+            HFONT hPrev = (HFONT)SelectObject(hdc, hAmpmFont);
+            SIZE amSize;
+            GetTextExtentPoint32W(hdc, ampm, 2, &amSize);
+            ampmW = amSize.cx;
+            GetTextMetricsW(hdc, &tmAm);
+            SelectObject(hdc, hPrev);
+        }
     }
 
     int totalW = timeSize.cx + (ampm[0] ? 6 + ampmW : 0);
@@ -181,17 +197,12 @@ void clock_draw_digital(HDC hdc, const RECT *rc, const SYSTEMTIME *st, const App
     SelectObject(hdc, s->hClockFont);
     ExtTextOutW(hdc, blockX, startY, 0, NULL, timeBuf, lstrlenW(timeBuf), NULL);
 
-    if (ampm[0]) {
-        HFONT hAmpmFont = CreateFontW(
-            ampmH, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (ampm[0] && hAmpmFont) {
         HFONT hOldAmpm = (HFONT)SelectObject(hdc, hAmpmFont);
         SetTextColor(hdc, tc);
         ExtTextOutW(hdc, blockX + timeSize.cx + 6, timeBaseline - tmAm.tmAscent,
                      0, NULL, ampm, lstrlenW(ampm), NULL);
         SelectObject(hdc, hOldAmpm);
-        DeleteObject(hAmpmFont);
     }
 
     SelectObject(hdc, s->hDateFont);

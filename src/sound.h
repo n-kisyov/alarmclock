@@ -7,6 +7,6 @@
 void sound_play_alarm(AppState *s);
 void sound_stop_alarm(AppState *s);
 void sound_on_mci_notify(AppState *s);
-void sound_cleanup(void);
+void sound_cleanup(AppState *s);
 
 #endif

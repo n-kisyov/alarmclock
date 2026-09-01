@@ -39,6 +39,15 @@ void autostart_update(AppState *s) {
 /* A saved position on a monitor that is no longer attached would put the window
    off-screen - and since closing hides to the tray rather than exiting, there is
    no easy way to drag it back. */
+/* No window exists yet when the first size is chosen, so this reads the desktop
+   rather than a window. */
+static int primary_dpi(void) {
+    HDC hdc = GetDC(NULL);
+    int d = hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96;
+    if (hdc) ReleaseDC(NULL, hdc);
+    return d ? d : 96;
+}
+
 static void ensure_on_screen(int *x, int *y, int w, int h) {
     RECT r = { *x, *y, *x + w, *y + h };
     if (MonitorFromRect(&r, MONITOR_DEFAULTTONULL) != NULL) return;
@@ -105,6 +114,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     /* Not 0: minute 0 is midnight, and alarms_check reads a matching
        last_fire_min as "already fired", which would mute a 00:00 alarm. */
     g_state.last_fire_min   = -1;
+    g_state.ringing_alarm   = -1;
 
     GetModuleFileNameW(NULL, g_state.exe_dir, MAX_PATH);
     TCHAR *slash = wcsrchr(g_state.exe_dir, L'\\');
@@ -135,8 +145,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     }
 
     if (g_state.winW == 0) {
-        g_state.winW = (g_state.clock_style == CLOCK_ANALOG) ? 500 : 720;
-        g_state.winH = (g_state.clock_style == CLOCK_ANALOG) ? 710 : 520;
+        /* These were raw pixels at any scaling, so on a high-dpi display the
+           window came up too small for its own fitted clock font and panel. */
+        int dpi = primary_dpi();
+        BOOL analog = (g_state.clock_style == CLOCK_ANALOG);
+        g_state.winW = MulDiv(analog ? WIN_W_ANALOG : WIN_W_DIGITAL, dpi, 96);
+        g_state.winH = MulDiv(analog ? WIN_H_ANALOG : WIN_H_DIGITAL, dpi, 96);
         g_state.winX = (GetSystemMetrics(SM_CXSCREEN) - g_state.winW) / 2;
         g_state.winY = (GetSystemMetrics(SM_CYSCREEN) - g_state.winH) / 2;
     }

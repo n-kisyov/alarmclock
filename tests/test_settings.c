@@ -28,7 +28,17 @@ static void defaults(AppState *s) {
     s->snooze_minutes = 3;
     s->hour24 = TRUE;
     s->alarms_enabled = TRUE;
+    /* Matches WinMain: minute 0 is midnight, and a last_fire_min of 0 would
+       read as "already fired" and mute a 00:00 alarm. */
+    s->last_fire_min = -1;
+    s->ringing_alarm = -1;
     alarms_init(s);
+}
+
+static void st_set(SYSTEMTIME *st, WORD dow, WORD hour, WORD minute) {
+    ZeroMemory(st, sizeof(*st));
+    st->wYear = 2026; st->wMonth = 9; st->wDay = 1;
+    st->wDayOfWeek = dow; st->wHour = hour; st->wMinute = minute;
 }
 
 int main(void) {
@@ -172,6 +182,102 @@ int main(void) {
     check("countdown total stays positive", cd_total_ms(&big) > 0);
     check("countdown total is the clamped length",
           cd_total_ms(&big) == (CD_MAX_HOURS * 3600 + 5 * 60) * 1000);
+
+    /* The alarm schedule is pure enough to exercise without a window. Anything
+       below that fires a one-shot alarm writes settings through exe_dir, so
+       that is pointed at the same scratch directory. */
+    SYSTEMTIME st;
+    int idx;
+
+    printf("\nalarms_check reports which slot fired\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[3].hour = 7; s.alarms[3].minute = 30;
+    s.alarms[3].enabled = TRUE; s.alarms[3].repeat_days = 0x7F;
+    st_set(&st, 2, 7, 30);
+    idx = -1;
+    check("fires at the matching minute", alarms_check(&s, &st, &idx) == TRUE);
+    check("reports the slot that fired", idx == 3);
+    s.alarm_active = FALSE; idx = -1;
+    check("does not fire twice in the same minute", alarms_check(&s, &st, &idx) == FALSE);
+    check("no slot reported when nothing fires", idx == -1);
+
+    printf("\nslots past alarm_count still ring\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarm_count = 2;
+    s.alarms[9].hour = 6; s.alarms[9].minute = 0;
+    s.alarms[9].enabled = TRUE; s.alarms[9].repeat_days = 0x7F;
+    st_set(&st, 3, 6, 0);
+    idx = -1;
+    check("an alarm the panel cannot show still fires", alarms_check(&s, &st, &idx) == TRUE);
+    check("its index is reported", idx == 9);
+
+    printf("\nrepeat days are respected\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 8; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x3E;   /* Mon-Fri */
+    st_set(&st, 0, 8, 0);
+    check("silent on a day outside the mask", alarms_check(&s, &st, &idx) == FALSE);
+    st_set(&st, 1, 8, 0);
+    check("fires on a day inside the mask", alarms_check(&s, &st, &idx) == TRUE);
+
+    printf("\nmidnight is a real time\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[0].hour = 0; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    st_set(&st, 1, 0, 0);
+    check("00:00 fires", alarms_check(&s, &st, &idx) == TRUE);
+
+    printf("\nthe master switch silences everything\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms_enabled = FALSE;
+    s.alarms[0].hour = 10; s.alarms[0].minute = 0;
+    s.alarms[0].enabled = TRUE; s.alarms[0].repeat_days = 0x7F;
+    st_set(&st, 1, 10, 0);
+    check("nothing fires with alarms disabled", alarms_check(&s, &st, &idx) == FALSE);
+
+    printf("\na one-shot alarm disarms itself, on disk\n");
+    defaults(&s); lstrcpyW(s.exe_dir, dir);
+    s.alarms[1].hour = 9; s.alarms[1].minute = 15;
+    s.alarms[1].enabled = TRUE; s.alarms[1].repeat_days = 0;
+    st_set(&st, 4, 9, 15);
+    check("one-shot fires", alarms_check(&s, &st, &idx) == TRUE);
+    check("one-shot is disarmed in memory", s.alarms[1].enabled == FALSE);
+    {
+        AppState re; defaults(&re);
+        check("the disarm reached the file straight away",
+              json_load_settings(&re, path) == SETTINGS_OK && re.alarms[1].enabled == FALSE);
+    }
+
+    printf("\nnext-alarm distance\n");
+    {
+        Alarm a; ZeroMemory(&a, sizeof(a));
+        SYSTEMTIME now; st_set(&now, 3, 10, 0);     /* Wednesday 10:00 */
+        int d = -1;
+
+        a.enabled = TRUE; a.hour = 11; a.minute = 30; a.repeat_days = 0;
+        check("one-shot later today", alarms_next_delta_minutes(&now, &a, &d) && d == 90);
+
+        a.hour = 9; a.minute = 0;
+        check("one-shot already past never comes round",
+              !alarms_next_delta_minutes(&now, &a, &d));
+
+        a.repeat_days = 1 << 3;                     /* Wednesday only, 09:00 */
+        check("weekly on today, already past, wraps a full week",
+              alarms_next_delta_minutes(&now, &a, &d) && d == 7 * 24 * 60 - 60);
+
+        a.hour = 6; a.minute = 0; a.repeat_days = 1 << 5;   /* Friday 06:00 */
+        check("two days out", alarms_next_delta_minutes(&now, &a, &d) && d == 2 * 24 * 60 - 240);
+
+        a.repeat_days = 0x7F; a.hour = 10; a.minute = 0;    /* daily, exactly now */
+        check("daily alarm at this very minute waits a day",
+              alarms_next_delta_minutes(&now, &a, &d) && d == 24 * 60);
+
+        a.enabled = FALSE;
+        check("disabled alarm has no next time", !alarms_next_delta_minutes(&now, &a, &d));
+
+        a.enabled = TRUE; a.hour = ALARM_UNSET; a.minute = ALARM_UNSET;
+        check("unset alarm has no next time", !alarms_next_delta_minutes(&now, &a, &d));
+    }
 
     printf("\n%s (%d failing)\n\n", fails ? "FAILED" : "all passed", fails);
     return fails ? 1 : 0;

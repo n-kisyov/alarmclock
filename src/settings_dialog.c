@@ -214,8 +214,13 @@ INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             }
 
             if (styleChanged) {
-                int w = (newStyle == CLOCK_ANALOG) ? 500 : 720;
-                int h = (newStyle == CLOCK_ANALOG) ? 710 : 520;
+                /* Scaled to the window's dpi. At 150% the raw analog width of
+                   500 fell below the minimum track size, so the resize was
+                   quietly ignored and the dial stayed cramped. */
+                int dpi = s->dpi ? s->dpi : 96;
+                BOOL analog = (newStyle == CLOCK_ANALOG);
+                int w = MulDiv(analog ? WIN_W_ANALOG : WIN_W_DIGITAL, dpi, 96);
+                int h = MulDiv(analog ? WIN_H_ANALOG : WIN_H_DIGITAL, dpi, 96);
                 SetWindowPos(s->hMainWnd, NULL, 0, 0, w, h,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
