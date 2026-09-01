@@ -291,6 +291,16 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         return;
     }
 
+    /* Hoisted out of the row loop: one pen, two brushes and one font now serve
+       every row, instead of a create/delete pair per row on every frame. The
+       tick font is dpi-scaled too, which the fixed 14px never was. */
+    HPEN   hChkPen   = CreatePen(PS_SOLID, 2, s->textColor);
+    HBRUSH hChkOn    = CreateSolidBrush(s->accentColor);
+    HBRUSH hChkOff   = CreateSolidBrush(s->bgColor);
+    HFONT  hTickFont = CreateFontW(S(14), 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                                   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                                   DEFAULT_PITCH, L"Segoe UI");
+
     int visible = alarm_visible_rows(&panel, &header);
     for (int i = 0; i < visible; i++) {
         RECT rowR  = get_alarm_row_rect(&panel, &header, i);
@@ -298,23 +308,21 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         RECT editR = get_edit_rect(&rowR);
         RECT clrR  = get_clear_rect(&rowR);
 
-        HPEN hChkPen = CreatePen(PS_SOLID, 2, s->textColor);
-        HBRUSH hChkBr = CreateSolidBrush(
-            (s->alarms[i].enabled && s->alarms[i].hour != ALARM_UNSET) ? s->accentColor : s->bgColor);
-        SelectObject(hdc, hChkBr); SelectObject(hdc, hChkPen);
+        BOOL armed = (s->alarms[i].enabled && s->alarms[i].hour != ALARM_UNSET);
+
+        /* Re-selected every row: the draw_button calls at the foot of the loop
+           restore whatever was selected before them. */
+        SelectObject(hdc, armed ? hChkOn : hChkOff);
+        SelectObject(hdc, hChkPen);
         Rectangle(hdc, chkR.left, chkR.top, chkR.right, chkR.bottom);
 
-        if (s->alarms[i].enabled && s->alarms[i].hour != ALARM_UNSET) {
+        if (armed) {
             SetTextColor(hdc, RGB(0xFF, 0xFF, 0xFF));
             SetBkMode(hdc, TRANSPARENT);
-            HFONT hTmp = CreateFont(14, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
-                                     OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                                     DEFAULT_PITCH, L"Segoe UI");
-            HFONT hOld = (HFONT)SelectObject(hdc, hTmp);
+            HFONT hOld = (HFONT)SelectObject(hdc, hTickFont);
             DrawText(hdc, L"\x2713", 1, (RECT *)&chkR, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-            SelectObject(hdc, hOld); DeleteObject(hTmp);
+            SelectObject(hdc, hOld);
         }
-        DeleteObject(hChkPen); DeleteObject(hChkBr);
 
         TCHAR timeStr[64];
         if (s->alarms[i].hour >= 0 && s->alarms[i].minute >= 0) {
@@ -349,7 +357,13 @@ static void draw_alarm_panel(HDC hdc, HWND hwnd, const RECT *clockRect) {
         draw_button(hdc, &editR, L"Edit",  btnBg, s->textColor, btn_state(HT_ALARM_EDIT, i));
         draw_button(hdc, &clrR,  L"Clear", btnBg, s->textColor, btn_state(HT_ALARM_CLEAR, i));
     }
+
+    /* Deselect before deleting, which is the documented contract. */
     SelectObject(hdc, hOldBr); SelectObject(hdc, hOldPn);
+    DeleteObject(hChkPen);
+    DeleteObject(hChkOn);
+    DeleteObject(hChkOff);
+    DeleteObject(hTickFont);
 }
 
 /* ---------- mode action bar ---------- */
@@ -539,7 +553,7 @@ static void mode_action(HWND hwnd, ModeButtonId hit) {
     case MB_TO_TIMER:
         s->app_mode = APP_MODE_COUNTDOWN;
         if (s->cd_remaining_ms == 0)
-            s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
+            s->cd_remaining_ms = cd_total_ms(s);
         break;
     case MB_TO_STOPWATCH:
         s->app_mode = APP_MODE_STOPWATCH;
@@ -558,7 +572,7 @@ static void mode_action(HWND hwnd, ModeButtonId hit) {
         break;
     case MB_CD_RESET:
         s->cd_running      = FALSE;
-        s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
+        s->cd_remaining_ms = cd_total_ms(s);
         break;
 
     case MB_SW_START:
@@ -614,6 +628,11 @@ INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
         s = (AppState *)lp;
         SetWindowLongPtrW(hDlg, GWLP_USERDATA, (LONG_PTR)s);
         theme_apply(hDlg, s->dark_mode);
+        /* Two digits is all any of these fields can mean; the edits were
+           unbounded, and a long enough run of digits overflowed the total. */
+        SendDlgItemMessageW(hDlg, IDC_CD_HOURS, EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(hDlg, IDC_CD_MINS,  EM_SETLIMITTEXT, 2, 0);
+        SendDlgItemMessageW(hDlg, IDC_CD_SECS,  EM_SETLIMITTEXT, 2, 0);
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_hours);   SetDlgItemText(hDlg,IDC_CD_HOURS,b); }
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_mins);    SetDlgItemText(hDlg,IDC_CD_MINS,b); }
         { TCHAR b[8]; wsprintf(b,L"%d",s->cd_secs);    SetDlgItemText(hDlg,IDC_CD_SECS,b); }
@@ -640,11 +659,9 @@ INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
             GetDlgItemText(hDlg,IDC_CD_HOURS,b,16); s->cd_hours = _wtoi(b);
             GetDlgItemText(hDlg,IDC_CD_MINS,b,16);  s->cd_mins  = _wtoi(b);
             GetDlgItemText(hDlg,IDC_CD_SECS,b,16);  s->cd_secs  = _wtoi(b);
-            if (s->cd_hours<0) s->cd_hours=0;
-            if (s->cd_mins<0)  s->cd_mins=0;
-            if (s->cd_secs<0)  s->cd_secs=0;
+            cd_clamp(s);
             if (s->cd_hours==0 && s->cd_mins==0 && s->cd_secs==0) s->cd_mins=1;
-            s->cd_remaining_ms = (s->cd_hours*3600 + s->cd_mins*60 + s->cd_secs)*1000;
+            s->cd_remaining_ms = cd_total_ms(s);
             s->cd_running = FALSE;
             EndDialog(hDlg, IDOK);
             return TRUE;
@@ -710,9 +727,11 @@ static void on_paint(HWND hwnd) {
 
     HPEN hSep = CreatePen(PS_SOLID, 1,
         g_state.dark_mode ? RGB(0x50,0x50,0x50) : RGB(0xC0,0xC0,0xC0));
-    SelectObject(hdcMem, hSep);
+    /* Deselected before the delete, per the documented contract. */
+    HPEN hOldSep = (HPEN)SelectObject(hdcMem, hSep);
     MoveToEx(hdcMem, cr.left + S(SEP_MARGIN), clockRect.bottom, NULL);
     LineTo(hdcMem, cr.right - S(SEP_MARGIN), clockRect.bottom);
+    SelectObject(hdcMem, hOldSep);
     DeleteObject(hSep);
 
     SYSTEMTIME st;
@@ -1260,6 +1279,7 @@ static void on_destroy(HWND hwnd) {
     AppState *s = &g_state;
     KillTimer(hwnd, TIMER_CLOCK);
     sound_stop_alarm(s);
+    sound_cleanup();
 
     WINDOWPLACEMENT wp; wp.length = sizeof(wp);
     if (GetWindowPlacement(hwnd, &wp)) {

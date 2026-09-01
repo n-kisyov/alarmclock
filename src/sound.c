@@ -104,6 +104,31 @@ static BOOL find_mp3_files(AppState *s) {
     return TRUE;
 }
 
+/* Last seen write time of the songs folder, so the scan is repeated only when
+   its contents have actually changed. */
+static FILETIME g_songs_mtime;
+
+/* The list and the shuffle cursor live across alarms now. find_mp3_files used to
+   be re-run - and re-shuffled from index 0 - on every single alarm, so even a
+   properly seeded rand() would have dealt a fresh deck each morning and always
+   started it from the top. */
+static BOOL ensure_mp3_files(AppState *s) {
+    TCHAR dir[MAX_PATH];
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    BOOL haveStamp = FALSE;
+
+    if (SUCCEEDED(StringCchPrintfW(dir, MAX_PATH, L"%s\\songs", s->exe_dir)) &&
+        GetFileAttributesExW(dir, GetFileExInfoStandard, &fad)) {
+        haveStamp = TRUE;
+        if (g_mp3_count > 0 && CompareFileTime(&fad.ftLastWriteTime, &g_songs_mtime) == 0)
+            return TRUE;
+    }
+
+    if (!find_mp3_files(s)) return FALSE;
+    if (haveStamp) g_songs_mtime = fad.ftLastWriteTime;
+    return TRUE;
+}
+
 static void set_mp3_volume(int mciVol) {
     WCHAR cmd[64];
     wsprintfW(cmd, L"setaudio alarm_mp3 volume to %d", mciVol);
@@ -223,7 +248,7 @@ void sound_play_alarm(AppState *s) {
     g_crescendo_done = FALSE;
 
     if (s->sound_mode == SOUND_MP3) {
-        if (find_mp3_files(s)) {
+        if (ensure_mp3_files(s)) {
             play_mp3_next(s);
             if (s->crescendo && !s->sound_preview) {
                 s->hCrescendoThread = CreateThread(NULL, 0, cresendo_thread, s, 0, NULL);
@@ -251,11 +276,17 @@ void sound_stop_alarm(AppState *s) {
     wait_and_close_thread(&s->hPreviewThread);
 
     mciSendStringW(L"close alarm_mp3", NULL, 0, NULL);
-    free_mp3_paths();
+    /* The playlist deliberately survives a stop, so the next alarm carries on
+       through the shuffle instead of restarting it. sound_cleanup frees it. */
 }
 
 void sound_on_mci_notify(AppState *s) {
     if (s->alarm_active && s->sound_mode == SOUND_MP3) {
         play_mp3_next(s);
     }
+}
+
+void sound_cleanup(void) {
+    free_mp3_paths();
+    ZeroMemory(&g_songs_mtime, sizeof(g_songs_mtime));
 }

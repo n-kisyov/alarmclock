@@ -3,6 +3,7 @@
 
 #include <windows.h>
 #include <commctrl.h>
+#include <limits.h>
 #include "resource.h"
 
 #define APP_NAME       L"AlarmClock"
@@ -128,6 +129,31 @@ void   autostart_update(AppState *s);
 INT_PTR CALLBACK settings_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK alarm_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
 INT_PTR CALLBACK cd_set_dlg_proc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp);
+
+/* Countdown length, in one place. The raw (h*3600 + m*60 + s) * 1000 form was
+   spelled out in five separate spots and overflowed int past about 596 hours,
+   landing negative - which the timer then read as "already finished". Inline in
+   the header so the settings reader can reach it too; it is linked into the test
+   harness, which has no main_window.c. */
+#define CD_MAX_HOURS 99
+
+static inline void cd_clamp(AppState *s) {
+    if (s->cd_hours < 0) s->cd_hours = 0;
+    if (s->cd_hours > CD_MAX_HOURS) s->cd_hours = CD_MAX_HOURS;
+    if (s->cd_mins  < 0)  s->cd_mins = 0;
+    if (s->cd_mins  > 59) s->cd_mins = 59;
+    if (s->cd_secs  < 0)  s->cd_secs = 0;
+    if (s->cd_secs  > 59) s->cd_secs = 59;
+}
+
+static inline int cd_total_ms(const AppState *s) {
+    long long total = ((long long)s->cd_hours * 3600 +
+                       (long long)s->cd_mins  * 60 +
+                       (long long)s->cd_secs) * 1000;
+    if (total < 0) total = 0;
+    if (total > (long long)INT_MAX) total = INT_MAX;
+    return (int)total;
+}
 
 LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 

@@ -4,6 +4,7 @@
 #include "clock_renderer.h"
 #include <dwmapi.h>
 #include <strsafe.h>
+#include <stdlib.h>
 
 AppState g_state;
 
@@ -82,6 +83,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
     clock_init();
 
     ZeroMemory(&g_state, sizeof(g_state));
+    /* Zeroing leaves every slot at hour 0, minute 0 - a real midnight alarm as
+       far as the panel and the checkboxes are concerned. alarms_init is the only
+       thing that writes ALARM_UNSET, and json_load_settings only reaches it once
+       a settings file has been read, so a first run never got one. */
+    alarms_init(&g_state);
+
+    /* Unseeded, rand() deals the same permutation on every run - the shuffled
+       alarm played the same track every morning. */
+    srand((unsigned)GetTickCount64());
+
     g_state.clock_style     = CLOCK_DIGITAL;
     g_state.sound_mode      = SOUND_SIMPLE;
     g_state.alarms_enabled  = TRUE;
@@ -101,8 +112,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance,
 
     settings_load(&g_state);
 
+    /* The countdown fields come straight out of the settings file, so clamp them
+       before anything multiplies them up. */
+    cd_clamp(&g_state);
     if (g_state.cd_remaining_ms == 0)
-        g_state.cd_remaining_ms = (g_state.cd_hours*3600 + g_state.cd_mins*60 + g_state.cd_secs)*1000;
+        g_state.cd_remaining_ms = cd_total_ms(&g_state);
 
     WNDCLASSEXW wc = {0};
     wc.cbSize        = sizeof(WNDCLASSEXW);

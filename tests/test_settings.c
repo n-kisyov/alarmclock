@@ -114,6 +114,65 @@ int main(void) {
     check("over-long array still parses", json_load_settings(&o, path) == SETTINGS_OK);
     check("key after the array was read", o.snooze_minutes == 7);
 
+    printf("\nunknown keys are skipped, not fatal\n");
+    write_raw(path,
+        "{ \"dark_mode\": true, \"future_flag\": true, \"future_num\": 4.5e2,"
+        " \"future_str\": \"has } and ] and \\\" inside\","
+        " \"future_obj\": {\"a\": [1, {\"b\": null}], \"c\": \"x\"},"
+        " \"future_null\": null, \"snooze_minutes\": 20,"
+        " \"alarms\": [ {\"hour\": 6, \"minute\": 15, \"enabled\": true,"
+        " \"label\": \"gym\", \"repeat_days\": 3, \"future_per_alarm\": {\"z\": 1}} ] }");
+    AppState u; defaults(&u);
+    check("file with unknown keys still loads", json_load_settings(&u, path) == SETTINGS_OK);
+    check("known key before the unknowns read", u.dark_mode == TRUE);
+    check("known key after the unknowns read", u.snooze_minutes == 20);
+    check("alarm past an unknown per-alarm key read", u.alarms[0].hour == 6 && u.alarms[0].minute == 15);
+    check("alarm label past unknown key read", lstrcmpW(u.alarms[0].label, L"gym") == 0);
+    check("alarm repeat mask past unknown key read", u.alarms[0].repeat_days == 3);
+
+    printf("\na known key with an unexpected type is skipped, not fatal\n");
+    write_raw(path, "{ \"dark_mode\": 1, \"snooze_minutes\": \"ten\", \"alarm_volume\": 40 }");
+    AppState ty; defaults(&ty); ty.snooze_minutes = 3;
+    check("mistyped values do not condemn the file", json_load_settings(&ty, path) == SETTINGS_OK);
+    check("mistyped bool left at its previous value", ty.dark_mode == FALSE);
+    check("mistyped int left at its previous value", ty.snooze_minutes == 3);
+    check("the well-typed key after them was read", ty.alarm_volume == 40);
+
+    printf("\nover-long strings truncate instead of derailing the parse\n");
+    write_raw(path,
+        "{ \"alarms\": [ {\"hour\": 8, \"minute\": 0, \"enabled\": true,"
+        " \"label\": \"0123456789012345678901234567890123456789 far past 31 chars\","
+        " \"repeat_days\": 0} ], \"snooze_minutes\": 9 }");
+    AppState lg; defaults(&lg);
+    check("over-long label still parses", json_load_settings(&lg, path) == SETTINGS_OK);
+    check("label truncated to the field width", lstrlenW(lg.alarms[0].label) == 31);
+    check("key after the long label was read", lg.snooze_minutes == 9);
+    check("alarm around the long label survived", lg.alarms[0].hour == 8);
+
+    printf("\ncontrol characters survive the round trip\n");
+    {
+        AppState c1; defaults(&c1);
+        c1.alarms[0].hour = 5; c1.alarms[0].minute = 5; c1.alarms[0].enabled = TRUE;
+        WCHAR lbl[8]; lbl[0] = L'a'; lbl[1] = 1; lbl[2] = L'b'; lbl[3] = 0;
+        lstrcpyW(c1.alarms[0].label, lbl);
+        check("save with a control char succeeds", json_save_settings(&c1, path));
+        AppState c2; defaults(&c2);
+        check("reload succeeds", json_load_settings(&c2, path) == SETTINGS_OK);
+        /* The writer emits \u0001; before the reader understood \u it came back
+           as the literal text "u0001". */
+        check("control char round-tripped, not literal 'u0001'",
+              lstrcmpW(c2.alarms[0].label, lbl) == 0);
+    }
+
+    printf("\nabsurd numbers saturate instead of wrapping\n");
+    write_raw(path, "{ \"cd_hours\": 999999999999, \"cd_mins\": 5, \"cd_secs\": 0 }");
+    AppState big; defaults(&big);
+    check("huge number parses", json_load_settings(&big, path) == SETTINGS_OK);
+    check("cd_hours clamped to CD_MAX_HOURS", big.cd_hours == CD_MAX_HOURS);
+    check("countdown total stays positive", cd_total_ms(&big) > 0);
+    check("countdown total is the clamped length",
+          cd_total_ms(&big) == (CD_MAX_HOURS * 3600 + 5 * 60) * 1000);
+
     printf("\n%s (%d failing)\n\n", fails ? "FAILED" : "all passed", fails);
     return fails ? 1 : 0;
 }

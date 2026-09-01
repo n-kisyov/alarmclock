@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <strsafe.h>
+#include <limits.h>
 
 typedef struct { const TCHAR *p, *end; } JsonReader;
 typedef struct {
@@ -27,21 +28,46 @@ static BOOL json_read_string(JsonReader *r, TCHAR *buf, int buf_sz) {
     if (r->p >= r->end || *r->p != L'"') return FALSE;
     r->p++;
     int i = 0;
-    while (r->p < r->end && *r->p != L'"' && i < buf_sz - 1) {
+    while (r->p < r->end && *r->p != L'"') {
+        TCHAR ch;
         if (*r->p == L'\\') {
             r->p++;
             if (r->p >= r->end) return FALSE;
             switch (*r->p) {
-            case L'"': buf[i++] = L'"'; break;
-            case L'\\': buf[i++] = L'\\'; break;
-            case L'n': buf[i++] = L'\n'; break;
-            case L'r': buf[i++] = L'\r'; break;
-            case L't': buf[i++] = L'\t'; break;
-            default: buf[i++] = *r->p; break;
+            case L'"':  ch = L'"';  break;
+            case L'\\': ch = L'\\'; break;
+            case L'n':  ch = L'\n'; break;
+            case L'r':  ch = L'\r'; break;
+            case L't':  ch = L'\t'; break;
+            case L'u': {
+                /* The writer emits \uXXXX for control characters, so without this
+                   a label that round-trips through the file came back as the
+                   literal text "u0001". */
+                if (r->p + 4 >= r->end) return FALSE;
+                int cp = 0;
+                for (int k = 1; k <= 4; k++) {
+                    TCHAR d = r->p[k];
+                    int nib;
+                    if      (d >= L'0' && d <= L'9') nib = d - L'0';
+                    else if (d >= L'a' && d <= L'f') nib = 10 + (d - L'a');
+                    else if (d >= L'A' && d <= L'F') nib = 10 + (d - L'A');
+                    else return FALSE;
+                    cp = cp * 16 + nib;
+                }
+                r->p += 4;
+                ch = (TCHAR)cp;
+                break;
+            }
+            default: ch = *r->p; break;
             }
         } else {
-            buf[i++] = *r->p;
+            ch = *r->p;
         }
+        /* Scan on past a full buffer instead of stopping mid-string. Bailing out
+           here left the reader parked inside the quotes, which made everything
+           after it unparseable and condemned the file - so one over-long label
+           threw away every setting in it. Over-long values truncate now. */
+        if (i < buf_sz - 1) buf[i++] = ch;
         r->p++;
     }
     buf[i] = 0;
@@ -61,13 +87,60 @@ static BOOL json_read_int(JsonReader *r, int *val) {
     int sign = 1;
     if (*r->p == L'-') { sign = -1; r->p++; }
     if (r->p >= r->end || (*r->p < L'0' || *r->p > L'9')) return FALSE;
-    int v = 0;
+    /* Accumulated wide and saturated: a long digit run used to overflow int and
+       wrap to whatever fell out, which then sailed through the range checks. */
+    long long v = 0;
     while (r->p < r->end && *r->p >= L'0' && *r->p <= L'9') {
-        v = v * 10 + (*r->p - L'0');
+        if (v <= (long long)INT_MAX) v = v * 10 + (*r->p - L'0');
         r->p++;
     }
-    *val = v * sign;
+    if (v > (long long)INT_MAX) v = INT_MAX;
+    *val = (int)v * sign;
     return TRUE;
+}
+
+/* Consumes exactly one value of any type without interpreting it. */
+static BOOL json_skip_value(JsonReader *r) {
+    json_skip_ws(r);
+    if (r->p >= r->end) return FALSE;
+
+    if (*r->p == L'"') {
+        TCHAR scratch[8];
+        return json_read_string(r, scratch, ARRAYSIZE(scratch));
+    }
+
+    if (*r->p == L'{' || *r->p == L'[') {
+        int depth = 0;
+        while (r->p < r->end) {
+            if (*r->p == L'"') {
+                TCHAR scratch[8];
+                /* Braces inside a string are not structure. */
+                if (!json_read_string(r, scratch, ARRAYSIZE(scratch))) return FALSE;
+                continue;
+            }
+            if (*r->p == L'{' || *r->p == L'[') depth++;
+            else if (*r->p == L'}' || *r->p == L']') {
+                if (--depth == 0) { r->p++; return TRUE; }
+            }
+            r->p++;
+        }
+        return FALSE;
+    }
+
+    if (*r->p == L'-' || (*r->p >= L'0' && *r->p <= L'9')) {
+        /* A number this build has no use for may still be fractional. */
+        r->p++;
+        while (r->p < r->end &&
+               ((*r->p >= L'0' && *r->p <= L'9') || *r->p == L'.' ||
+                *r->p == L'e' || *r->p == L'E' || *r->p == L'+' || *r->p == L'-'))
+            r->p++;
+        return TRUE;
+    }
+
+    BOOL ignored;
+    if (json_read_bool(r, &ignored)) return TRUE;
+    if (r->p + 4 <= r->end && wcsncmp(r->p, L"null", 4) == 0) { r->p += 4; return TRUE; }
+    return FALSE;
 }
 
 static BOOL sb_reserve(WStringBuilder *sb, size_t extra_chars) {
@@ -229,6 +302,8 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
         if (!json_read_string(&r, key, 128)) { free(buf); return SETTINGS_CORRUPT; }
         if (!json_expect(&r, L':')) { free(buf); return SETTINGS_CORRUPT; }
 
+        const TCHAR *valueStart = r.p;
+
         if (lstrcmp(key, L"dark_mode") == 0) json_read_bool(&r, &t->dark_mode);
         else if (lstrcmp(key, L"hour24") == 0) json_read_bool(&r, &t->hour24);
         else if (lstrcmp(key, L"crescendo") == 0) json_read_bool(&r, &t->crescendo);
@@ -239,10 +314,13 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
         else if (lstrcmp(key, L"alarms_collapsed") == 0) json_read_bool(&r, &t->alarms_collapsed);
         else if (lstrcmp(key, L"clock_style") == 0) { TCHAR v[32]; if (json_read_string(&r, v, 32)) t->clock_style = (lstrcmp(v, L"analog") == 0) ? CLOCK_ANALOG : CLOCK_DIGITAL; }
         else if (lstrcmp(key, L"alarms_enabled") == 0) json_read_bool(&r, &t->alarms_enabled);
-        else if (lstrcmp(key, L"alarm_count") == 0) { int ac = 5; json_read_int(&r, &ac); if (ac < 1) ac = 1; if (ac > MAX_ALARMS) ac = MAX_ALARMS; t->alarm_count = ac; }
-        else if (lstrcmp(key, L"alarm_volume") == 0) { int av = 80; json_read_int(&r, &av); if (av >= 10 && av <= 100) t->alarm_volume = av; }
-        else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm = 5; json_read_int(&r, &sm); if (sm >= 1 && sm <= 60) t->snooze_minutes = sm; }
-        else if (lstrcmp(key, L"app_mode") == 0) { int am = 0; json_read_int(&r, &am); if (am >= 0 && am <= 2) t->app_mode = am; }
+        /* Assign only on a successful read. These used to seed a local with a
+           hardcoded default and store it regardless, so a value the reader could
+           not parse silently reset the setting instead of leaving it alone. */
+        else if (lstrcmp(key, L"alarm_count") == 0) { int ac; if (json_read_int(&r, &ac)) { if (ac < 1) ac = 1; if (ac > MAX_ALARMS) ac = MAX_ALARMS; t->alarm_count = ac; } }
+        else if (lstrcmp(key, L"alarm_volume") == 0) { int av; if (json_read_int(&r, &av) && av >= 10 && av <= 100) t->alarm_volume = av; }
+        else if (lstrcmp(key, L"snooze_minutes") == 0) { int sm; if (json_read_int(&r, &sm) && sm >= 1 && sm <= 60) t->snooze_minutes = sm; }
+        else if (lstrcmp(key, L"app_mode") == 0) { int am; if (json_read_int(&r, &am) && am >= 0 && am <= 2) t->app_mode = am; }
         else if (lstrcmp(key, L"win_x") == 0) json_read_int(&r, &t->winX);
         else if (lstrcmp(key, L"win_y") == 0) json_read_int(&r, &t->winY);
         else if (lstrcmp(key, L"win_w") == 0) json_read_int(&r, &t->winW);
@@ -279,15 +357,16 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
                     if (!json_read_string(&r, akey, 64)) { free(buf); return SETTINGS_CORRUPT; }
                     if (!json_expect(&r, L':')) { free(buf); return SETTINGS_CORRUPT; }
 
+                    const TCHAR *alarmValueStart = r.p;
+
                     if (lstrcmp(akey, L"hour") == 0) json_read_int(&r, &a->hour);
                     else if (lstrcmp(akey, L"minute") == 0) json_read_int(&r, &a->minute);
                     else if (lstrcmp(akey, L"enabled") == 0) json_read_bool(&r, &a->enabled);
                     else if (lstrcmp(akey, L"label") == 0) { TCHAR lb[32]; if (json_read_string(&r, lb, 32)) lstrcpynW(a->label, lb, 32); }
-                    else if (lstrcmp(akey, L"repeat_days") == 0) { int rd = 0; json_read_int(&r, &rd); a->repeat_days = (BYTE)rd; hasRepeatDays = TRUE; }
+                    else if (lstrcmp(akey, L"repeat_days") == 0) { int rd; if (json_read_int(&r, &rd)) { a->repeat_days = (BYTE)rd; hasRepeatDays = TRUE; } }
                     else if (lstrcmp(akey, L"repeat") == 0) {
-                        int rm = 0;
-                        json_read_int(&r, &rm);
-                        if (!hasRepeatDays) {
+                        int rm;
+                        if (json_read_int(&r, &rm) && !hasRepeatDays) {
                             if (rm == 0) a->repeat_days = 0;
                             else if (rm == 1) a->repeat_days = 0x7F;
                             else if (rm == 2) a->repeat_days = 0x3E;
@@ -295,7 +374,14 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
                         }
                     }
 
+                    /* Same fallback as the top level, for per-alarm keys. */
                     json_skip_ws(&r);
+                    if (r.p < r.end && *r.p != L'}' && *r.p != L',') {
+                        r.p = alarmValueStart;
+                        if (!json_skip_value(&r)) { free(buf); return SETTINGS_CORRUPT; }
+                        json_skip_ws(&r);
+                    }
+
                     if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return SETTINGS_CORRUPT; } }
                 }
 
@@ -312,14 +398,28 @@ SettingsLoadResult json_load_settings(AppState *s, const TCHAR *path) {
             }
         }
 
+        /* If the reader is not sitting on a separator, nothing above consumed the
+           value: the key is one this build does not know, or it carries a type
+           this build did not expect. Either way, skip it. Previously the reader
+           stayed parked on the value, the separator check below failed, and a
+           single unrecognised key condemned the whole file to SETTINGS_CORRUPT -
+           which meant no new setting could ever be added without older builds
+           discarding the user's alarms. */
         json_skip_ws(&r);
+        if (r.p < r.end && *r.p != L'}' && *r.p != L',') {
+            r.p = valueStart;
+            if (!json_skip_value(&r)) { free(buf); return SETTINGS_CORRUPT; }
+            json_skip_ws(&r);
+        }
+
         if (r.p < r.end && *r.p != L'}') { if (!json_expect(&r, L',')) { free(buf); return SETTINGS_CORRUPT; } }
     }
 
     free(buf);
 
+    cd_clamp(t);
     if (t->cd_remaining_ms == 0)
-        t->cd_remaining_ms = (t->cd_hours * 3600 + t->cd_mins * 60 + t->cd_secs) * 1000;
+        t->cd_remaining_ms = cd_total_ms(t);
 
     *s = scratch;
     return SETTINGS_OK;
